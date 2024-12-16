@@ -6,12 +6,9 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
-static bool enable_validation_layers = true;
-static const char *validation_layers[] = {
-    "VK_LAYER_KHRONOS_validation"
-};
+#define ARRAY_COUNT(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
 
-bool check_validation_layer_support(const char **layers, int layer_count);
+bool check_layer_support(const char **requested_layers, int requested_layer_count);
 
 int main(int argc, char **argv) {
     if (!glfwInit()) {
@@ -41,13 +38,13 @@ int main(int argc, char **argv) {
       uint32_t           apiVersion;
       } VkApplicationInfo;
     */
-    VkApplicationInfo appInfo = {};
-    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Explore Vulkan";
-    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "Best Engine";
-    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_0;
+    VkApplicationInfo app_info = {};
+    app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app_info.pApplicationName = "Explore Vulkan";
+    app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    app_info.pEngineName = "Best Engine";
+    app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    app_info.apiVersion = VK_API_VERSION_1_0;
 
     /*
       typedef struct VkInstanceCreateInfo {
@@ -61,28 +58,34 @@ int main(int argc, char **argv) {
       const char* const*          ppEnabledExtensionNames;
       } VkInstanceCreateInfo;
     */
-    VkInstanceCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    createInfo.pApplicationInfo = &appInfo;
+    VkInstanceCreateInfo create_info = {};
+    create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    create_info.pApplicationInfo = &app_info;
 
-    uint32_t glfwExtensionCount = 0;
-    const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+    uint32_t glfw_extension_count = 0;
+    const char **glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
 
     // NOTE: Enable extensions that GLFW needs from Vulkan. On my machine right now:
-    //       glfwExtensions[0] = VK_KHR_surface
-    //       glfwExtensions[1] = VK_KHR_xcb_surface
+    //       glfw_extensions[0] = VK_KHR_surface
+    //       glfw_extensions[1] = VK_KHR_xcb_surface
     printf("\nINFO: Enumerating extensions GLFW needs from Vulkan:\n");
-    for (uint32_t i = 0; i < glfwExtensionCount; i++) {
-        printf("INFO: glfwExtensions[%u] = %s\n", i, glfwExtensions[i]);
+    for (uint32_t i = 0; i < glfw_extension_count; i++) {
+        printf("INFO: glfw_extensions[%u] = %s\n", i, glfw_extensions[i]);
     }
 
-    createInfo.enabledExtensionCount = glfwExtensionCount;
-    createInfo.ppEnabledExtensionNames = glfwExtensions;
+    create_info.enabledExtensionCount = glfw_extension_count;
+    create_info.ppEnabledExtensionNames = glfw_extensions;
 
-    // NOTE: Enable validation layers
-    if (enable_validation_layers && !check_validation_layer_support(validation_layers, 1)) {
-        fprintf(stderr, "ERROR: Validation layers requested but not available!\n");
+    // NOTE: Validation layers
+    const char *requested_layers[] = { "VK_LAYER_KHRONOS_validation" };
+
+    if (!check_layer_support(requested_layers, ARRAY_COUNT(requested_layers))) {
+        fprintf(stderr, "ERROR: Requested Vulkan layers are not available.");
+        return -1;
     }
+
+    create_info.enabledLayerCount = ARRAY_COUNT(requested_layers);
+    create_info.ppEnabledLayerNames = requested_layers;
 
     // NOTE: Finally create VK instance
     /*
@@ -91,8 +94,8 @@ int main(int argc, char **argv) {
       const VkAllocationCallbacks*                pAllocator,
       VkInstance*                                 pInstance);
     */
-    if (vkCreateInstance(&createInfo, NULL, &instance) != VK_SUCCESS) {
-        printf("ERROR: Failed to create Vulkan instance!\n");
+    if (vkCreateInstance(&create_info, NULL, &instance) != VK_SUCCESS) {
+        fprintf(stderr, "ERROR: Failed to create Vulkan instance!\n");
         return -1;
     }
 
@@ -106,7 +109,7 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-bool check_validation_layer_support(const char **layers, int layer_count) {
+bool check_layer_support(const char **requested_layers, int requested_layer_count) {
     uint32_t available_layer_count;
 
     /*
@@ -133,10 +136,30 @@ bool check_validation_layer_support(const char **layers, int layer_count) {
     //       available_layers[2] = VK_LAYER_INTEL_nullhw
     //       available_layers[3] = VK_LAYER_MESA_overlay
     printf("\nINFO: Enumarating available Vulkan layers:\n");
-    for (int i = 0; i < available_layer_count; i++) {
+    for (uint32_t i = 0; i < available_layer_count; i++) {
         printf("INFO: available_layers[%d] = %s\n", i, available_layers[i].layerName);
     }
 
+    bool layers_valid = true;
+    for (int requested_layer_i = 0; requested_layer_i < requested_layer_count; requested_layer_i++) {
+        bool layer_found = false;
+
+        for (uint32_t available_layer_i = 0; available_layer_i < available_layer_count; available_layer_i++) {
+            bool name_equals = strcmp(requested_layers[requested_layer_i],
+                                      available_layers[available_layer_i].layerName) == 0;
+
+            if (name_equals) {
+                layer_found = true;
+                break;
+            }
+        }
+
+        if (!layer_found) {
+            layers_valid = false;
+            break;
+        }
+    }
+
     free(available_layers);
-    return false;
+    return layers_valid;
 }
