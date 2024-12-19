@@ -16,6 +16,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow *window = glfwCreateWindow(800, 600, "Hello world", NULL, NULL);
     if (!window) {
         fprintf(stderr, "ERROR: Failed to create GLFW window\n");
