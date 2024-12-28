@@ -1,4 +1,5 @@
 #include <GLFW/glfw3.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,20 +9,23 @@
 
 #define ARRAY_COUNT(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
 
+enum { SCREEN_WIDTH = 800, SCREEN_HEIGHT = 600 };
+
+void exit_with_error(const char *msg, ...);
+void trace_log(const char *msg, ...);
+void *xmalloc(size_t bytes);
+
 bool check_layer_support(const char **requested_layers, int requested_layer_count);
 
 int main(int argc, char **argv) {
-    if (!glfwInit()) {
-        fprintf(stderr, "ERROR: Failed to intialize GLFW\n");
-        return -1;
-    }
+    if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
+
+    trace_log("Initialized GLFW");
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow *window = glfwCreateWindow(800, 600, "Hello world", NULL, NULL);
+    GLFWwindow *window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Explore Vulkan", NULL, NULL);
     if (!window) {
-        fprintf(stderr, "ERROR: Failed to create GLFW window\n");
-        glfwTerminate();
-        return -1;
+        exit_with_error("Failed to initialize GLFW window");
     }
 
     glfwMakeContextCurrent(window);
@@ -69,9 +73,9 @@ int main(int argc, char **argv) {
     // NOTE: Enable extensions that GLFW needs from Vulkan. On my machine right now:
     //       glfw_extensions[0] = VK_KHR_surface
     //       glfw_extensions[1] = VK_KHR_xcb_surface
-    printf("\nINFO: Enumerating extensions GLFW needs from Vulkan:\n");
+    trace_log("Enumerating extensions GLFW needs from Vulkan:");
     for (uint32_t i = 0; i < glfw_extension_count; i++) {
-        printf("INFO: glfw_extensions[%u] = %s\n", i, glfw_extensions[i]);
+        trace_log("  glfw_extensions[%u] = %s", i, glfw_extensions[i]);
     }
 
     create_info.enabledExtensionCount = glfw_extension_count;
@@ -81,8 +85,7 @@ int main(int argc, char **argv) {
     const char *requested_layers[] = { "VK_LAYER_KHRONOS_validation" };
 
     if (!check_layer_support(requested_layers, ARRAY_COUNT(requested_layers))) {
-        fprintf(stderr, "ERROR: Requested Vulkan layers are not available.");
-        return -1;
+        exit_with_error("Requested Vulkan layers are not available");
     }
 
     create_info.enabledLayerCount = ARRAY_COUNT(requested_layers);
@@ -96,14 +99,17 @@ int main(int argc, char **argv) {
       VkInstance*                                 pInstance);
     */
     if (vkCreateInstance(&create_info, NULL, &instance) != VK_SUCCESS) {
-        fprintf(stderr, "ERROR: Failed to create Vulkan instance!\n");
-        return -1;
+        exit_with_error("Failed to create Vulkan instance");
     }
 
+    trace_log("Created Vulkan instance");
+
+    trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
     }
 
+    trace_log("Exiting gracefully");
     vkDestroyInstance(instance, NULL);
     glfwDestroyWindow(window);
     glfwTerminate();
@@ -128,7 +134,7 @@ bool check_layer_support(const char **requested_layers, int requested_layer_coun
       char        description[VK_MAX_DESCRIPTION_SIZE];
       } VkLayerProperties;a
     */
-    VkLayerProperties *available_layers = malloc(sizeof(VkLayerProperties) * available_layer_count);
+    VkLayerProperties *available_layers = xmalloc(sizeof(VkLayerProperties) * available_layer_count);
     vkEnumerateInstanceLayerProperties(&available_layer_count, available_layers);
 
     // NOTE: Available layers on my system right now:
@@ -136,9 +142,9 @@ bool check_layer_support(const char **requested_layers, int requested_layer_coun
     //       available_layers[1] = VK_LAYER_KHRONOS_validation
     //       available_layers[2] = VK_LAYER_INTEL_nullhw
     //       available_layers[3] = VK_LAYER_MESA_overlay
-    printf("\nINFO: Enumarating available Vulkan layers:\n");
+    trace_log("Enumarating available Vulkan layers:");
     for (uint32_t i = 0; i < available_layer_count; i++) {
-        printf("INFO: available_layers[%d] = %s\n", i, available_layers[i].layerName);
+        trace_log("  available_layers[%d] = %s", i, available_layers[i].layerName);
     }
 
     bool layers_valid = true;
@@ -163,4 +169,31 @@ bool check_layer_support(const char **requested_layers, int requested_layer_coun
 
     free(available_layers);
     return layers_valid;
+}
+
+void exit_with_error(const char *msg, ...) {
+    fprintf(stderr, "FATAL: ");
+    va_list ap;
+    va_start(ap, msg);
+    vfprintf(stderr, msg, ap);
+    va_end(ap);
+    fprintf(stderr, "\n");
+
+    glfwTerminate();
+    exit(1);
+}
+
+void trace_log(const char *msg, ...) {
+    printf("INFO: ");
+    va_list ap;
+    va_start(ap, msg);
+    vprintf(msg, ap);
+    va_end(ap);
+    printf("\n");
+}
+
+void *xmalloc(size_t bytes) {
+    void *d = malloc(bytes);
+    if (d == NULL) exit_with_error("Failed to malloc");
+    return d;
 }
