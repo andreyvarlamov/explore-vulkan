@@ -12,6 +12,14 @@
 
 enum { SCREEN_WIDTH = 800, SCREEN_HEIGHT = 600 };
 
+typedef struct {
+    VkSwapchainKHR swapchain;
+    uint32_t swapchain_image_count;
+    VkImage *swapchain_images;
+    VkFormat swapchain_image_format;
+    VkExtent2D swapchain_extent;
+} Swapchain_Etc_Etc;
+
 void exit_with_error(const char *msg, ...);
 void trace_log(const char *msg, ...);
 void *xmalloc(size_t bytes);
@@ -21,7 +29,14 @@ bool check_layer_support(const char **requested_layers, int requested_layer_coun
 VkPhysicalDevice find_suitable_physical_device(VkInstance instance);
 VkDevice create_logical_device(VkPhysicalDevice physical_device);
 VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window);
-VkSwapchainKHR create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_device, VkDevice device);
+Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevice physical_device, VkDevice device);
+void create_image_view(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count);
+VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count);
+VkFramebuffer *create_framebuffers(VkDevice device,
+                                   VkRenderPass render_pass,
+                                   VkExtent2D swapchain_extent,
+                                   VkImageView *swapchain_image_views,
+                                   uint32_t image_count);
 
 static int g_graphics_family_index; // TODO: What?
 
@@ -44,10 +59,17 @@ int main(int argc, char **argv) {
 
     VkPhysicalDevice physical_device = find_suitable_physical_device(instance);
     VkDevice device = create_logical_device(physical_device);
-
     VkSurfaceKHR surface = create_surface(instance, window);
-
-    VkSwapchainKHR swapchain = create_swapchain(surface, physical_device, device);
+    Swapchain_Etc_Etc swapchain_etc_etc = create_swapchain_etc_etc(surface, physical_device, device);
+    VkImageView *swapchain_image_views = create_image_views(device,
+                                                            swapchain_etc_etc.swapchain_image_format,
+                                                            swapchain_etc_etc.swapchain_images,
+                                                            swapchain_etc_etc.swapchain_image_count);
+    VkFramebuffer *swapchain_framebuffers = create_framebuffers(device,
+                                                                (VkRenderPass){0}, // TODO
+                                                                swapchain_etc_etc.swapchain_extent,
+                                                                swapchain_image_views,
+                                                                swapchain_etc_etc.swapchain_image_count);
 
     trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
@@ -55,7 +77,14 @@ int main(int argc, char **argv) {
     }
 
     trace_log("Exiting gracefully");
-    vkDestroySwapchainKHR(device, swapchain, NULL);
+
+    for (uint32_t i = 0; i < swapchain_etc_etc.swapchain_image_count; i++) {
+        vkDestroyFramebuffer(device, swapchain_framebuffers[i], NULL);
+        vkDestroyImageView(device, swapchain_image_views[i], NULL);
+    }
+    free(swapchain_framebuffers);
+    free(swapchain_image_views);
+    vkDestroySwapchainKHR(device, swapchain_etc_etc.swapchain, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
     vkDestroyDevice(device, NULL);
     vkDestroyInstance(instance, NULL);
@@ -393,7 +422,7 @@ VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window) {
     return surface;
 }
 
-VkSwapchainKHR create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_device, VkDevice device) {
+Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevice physical_device, VkDevice device) {
     /*
       typedef struct VkSurfaceCapabilitiesKHR {
           uint32_t                         minImageCount;
@@ -558,5 +587,140 @@ VkSwapchainKHR create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_
     VkImage *swapchain_images = xmalloc(sizeof(VkImage) * swapchain_image_count);
     vkGetSwapchainImagesKHR(device, swapchain, &swapchain_image_count, swapchain_images);
 
-    return swapchain;
+    Swapchain_Etc_Etc result;
+    result.swapchain = swapchain;
+    result.swapchain_image_count = swapchain_image_count;
+    result.swapchain_images = swapchain_images;
+    result.swapchain_extent = extent;
+    result.swapchain_image_format = surface_format.format;
+    return result;
+}
+
+VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count) {
+    VkImageView *swapchain_image_views = xmalloc(sizeof(VkImageView) * image_count);
+
+    for (uint32_t i = 0; i < image_count; i++) {
+        /*
+          typedef struct VkImageViewCreateInfo {
+              VkStructureType            sType;
+              const void*                pNext;
+              VkImageViewCreateFlags     flags;
+              VkImage                    image;
+              VkImageViewType            viewType;
+              VkFormat                   format;
+              VkComponentMapping         components;
+              VkImageSubresourceRange    subresourceRange;
+          } VkImageViewCreateInfo;
+        */
+        VkImageViewCreateInfo view_info = {};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = swapchain_images[i];
+        /*
+          typedef enum VkImageViewType {
+              VK_IMAGE_VIEW_TYPE_1D = 0,
+              VK_IMAGE_VIEW_TYPE_2D = 1,
+              VK_IMAGE_VIEW_TYPE_3D = 2,
+              VK_IMAGE_VIEW_TYPE_CUBE = 3,
+              VK_IMAGE_VIEW_TYPE_1D_ARRAY = 4,
+              VK_IMAGE_VIEW_TYPE_2D_ARRAY = 5,
+              VK_IMAGE_VIEW_TYPE_CUBE_ARRAY = 6,
+              VK_IMAGE_VIEW_TYPE_MAX_ENUM = 0x7FFFFFFF
+          } VkImageViewType;
+        */
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = swapchain_image_format;
+
+        /*
+          typedef struct VkComponentMapping {
+              VkComponentSwizzle    r;
+              VkComponentSwizzle    g;
+              VkComponentSwizzle    b;
+              VkComponentSwizzle    a;
+          } VkComponentMapping;
+         */
+        view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+        /*
+          typedef struct VkImageSubresourceRange {
+              VkImageAspectFlags    aspectMask;
+              uint32_t              baseMipLevel;
+              uint32_t              levelCount;
+              uint32_t              baseArrayLayer;
+              uint32_t              layerCount;
+          } VkImageSubresourceRange;
+        */
+        /*
+          typedef enum VkImageAspectFlagBits {
+              VK_IMAGE_ASPECT_COLOR_BIT = 0x00000001,
+              VK_IMAGE_ASPECT_DEPTH_BIT = 0x00000002,
+              VK_IMAGE_ASPECT_STENCIL_BIT = 0x00000004,
+              VK_IMAGE_ASPECT_METADATA_BIT = 0x00000008,
+              VK_IMAGE_ASPECT_PLANE_0_BIT = 0x00000010,
+              VK_IMAGE_ASPECT_PLANE_1_BIT = 0x00000020,
+              VK_IMAGE_ASPECT_PLANE_2_BIT = 0x00000040,
+              VK_IMAGE_ASPECT_NONE = 0,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT = 0x00000080,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT = 0x00000100,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT = 0x00000200,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT = 0x00000400,
+              VK_IMAGE_ASPECT_PLANE_0_BIT_KHR = VK_IMAGE_ASPECT_PLANE_0_BIT,
+              VK_IMAGE_ASPECT_PLANE_1_BIT_KHR = VK_IMAGE_ASPECT_PLANE_1_BIT,
+              VK_IMAGE_ASPECT_PLANE_2_BIT_KHR = VK_IMAGE_ASPECT_PLANE_2_BIT,
+              VK_IMAGE_ASPECT_NONE_KHR = VK_IMAGE_ASPECT_NONE,
+              VK_IMAGE_ASPECT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+          } VkImageAspectFlagBits;
+        */
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(device, &view_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) {
+            exit_with_error("Failed to creat image view for swapchain image %d", i);
+        }
+    }
+
+    return swapchain_image_views;
+}
+
+VkFramebuffer *create_framebuffers(VkDevice device,
+                                   VkRenderPass render_pass,
+                                   VkExtent2D swapchain_extent,
+                                   VkImageView *swapchain_image_views,
+                                   uint32_t image_count) {
+    VkFramebuffer *swapchain_framebuffers = xmalloc(sizeof(VkFramebuffer) * image_count);
+
+    for (uint32_t i = 0; i < image_count; i++) {
+        /*
+          typedef struct VkFramebufferCreateInfo {
+              VkStructureType             sType;
+              const void*                 pNext;
+              VkFramebufferCreateFlags    flags;
+              VkRenderPass                renderPass;
+              uint32_t                    attachmentCount;
+              const VkImageView*          pAttachments;
+              uint32_t                    width;
+              uint32_t                    height;
+              uint32_t                    layers;
+          } VkFramebufferCreateInfo;
+        */
+        VkFramebufferCreateInfo framebuffer_info = {};
+        framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebuffer_info.renderPass = render_pass;
+        framebuffer_info.attachmentCount = 1;
+        framebuffer_info.pAttachments = &swapchain_image_views[i];
+        framebuffer_info.width = swapchain_extent.width;
+        framebuffer_info.height = swapchain_extent.height;
+        framebuffer_info.layers = 1;
+
+        if (vkCreateFramebuffer(device, &framebuffer_info, NULL, &swapchain_framebuffers[i]) != VK_SUCCESS) {
+            exit_with_error("Failed to create framebuffer for swapchain image %d", i);
+        }
+    }
+
+    return swapchain_framebuffers;
 }
