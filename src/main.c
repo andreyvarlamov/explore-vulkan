@@ -16,6 +16,7 @@ void trace_log(const char *msg, ...);
 void *xmalloc(size_t bytes);
 
 bool check_layer_support(const char **requested_layers, int requested_layer_count);
+void enumerate_physical_devices(VkInstance instance);
 
 int main(int argc, char **argv) {
     if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
@@ -104,6 +105,8 @@ int main(int argc, char **argv) {
 
     trace_log("Created Vulkan instance");
 
+    enumerate_physical_devices(instance);
+
     trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -114,6 +117,33 @@ int main(int argc, char **argv) {
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
+}
+
+void exit_with_error(const char *msg, ...) {
+    fprintf(stderr, "FATAL: ");
+    va_list ap;
+    va_start(ap, msg);
+    vfprintf(stderr, msg, ap);
+    va_end(ap);
+    fprintf(stderr, "\n");
+
+    glfwTerminate();
+    exit(1);
+}
+
+void trace_log(const char *msg, ...) {
+    printf("INFO: ");
+    va_list ap;
+    va_start(ap, msg);
+    vprintf(msg, ap);
+    va_end(ap);
+    printf("\n");
+}
+
+void *xmalloc(size_t bytes) {
+    void *d = malloc(bytes);
+    if (d == NULL) exit_with_error("Failed to malloc");
+    return d;
 }
 
 bool check_layer_support(const char **requested_layers, int requested_layer_count) {
@@ -171,29 +201,53 @@ bool check_layer_support(const char **requested_layers, int requested_layer_coun
     return layers_valid;
 }
 
-void exit_with_error(const char *msg, ...) {
-    fprintf(stderr, "FATAL: ");
-    va_list ap;
-    va_start(ap, msg);
-    vfprintf(stderr, msg, ap);
-    va_end(ap);
-    fprintf(stderr, "\n");
+void enumerate_physical_devices(VkInstance instance) {
+    uint32_t device_count = 0;
 
-    glfwTerminate();
-    exit(1);
-}
+    /*
+      VKAPI_ATTR VkResult VKAPI_CALL vkEnumeratePhysicalDevices(
+      VkInstance                                  instance,
+      uint32_t*                                   pPhysicalDeviceCount,
+      VkPhysicalDevice*                           pPhysicalDevices);
+    */
+    vkEnumeratePhysicalDevices(instance, &device_count, NULL);
 
-void trace_log(const char *msg, ...) {
-    printf("INFO: ");
-    va_list ap;
-    va_start(ap, msg);
-    vprintf(msg, ap);
-    va_end(ap);
-    printf("\n");
-}
+    if (device_count == 0) {
+        exit_with_error("Failed to find GPUs that support Vulkan");
+    }
 
-void *xmalloc(size_t bytes) {
-    void *d = malloc(bytes);
-    if (d == NULL) exit_with_error("Failed to malloc");
-    return d;
+    /*
+      VkPhysicalDevice is an opaque pointer in vulkan_core.h:
+      VK_DEFINE_HANDLE(VkPhysicalDevice)
+      #define VK_DEFINE_HANDLE(object) typedef struct object##_T* object;
+      Actual definition is by each implementation.
+    */
+    VkPhysicalDevice *physical_devices = xmalloc(sizeof(VkPhysicalDevice) * device_count);
+    vkEnumeratePhysicalDevices(instance, &device_count, physical_devices);
+
+    trace_log("Enumerating found physical_devices:");
+    for (uint32_t i = 0; i < device_count; i++) {
+        /*
+          typedef struct VkPhysicalDeviceProperties {
+          uint32_t                            apiVersion;
+          uint32_t                            driverVersion;
+          uint32_t                            vendorID;
+          uint32_t                            deviceID;
+          VkPhysicalDeviceType                deviceType;
+          char                                deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
+          uint8_t                             pipelineCacheUUID[VK_UUID_SIZE];
+          VkPhysicalDeviceLimits              limits;
+          VkPhysicalDeviceSparseProperties    sparseProperties;
+          } VkPhysicalDeviceProperties;
+        */
+        VkPhysicalDeviceProperties device_properties;
+        /*
+          VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties(
+          VkPhysicalDevice                            physicalDevice,
+          VkPhysicalDeviceProperties*                 pProperties);
+        */
+        vkGetPhysicalDeviceProperties(physical_devices[i], &device_properties);
+
+        trace_log("Device %d: %s", i, device_properties.deviceName);
+    }
 }
