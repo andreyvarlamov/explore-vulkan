@@ -8,7 +8,7 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 
-#define ARRAY_COUNT(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
+#define array_count(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
 
 enum { SCREEN_WIDTH = 800, SCREEN_HEIGHT = 600 };
 
@@ -18,19 +18,25 @@ typedef struct {
     VkImage *swapchain_images;
     VkFormat swapchain_image_format;
     VkExtent2D swapchain_extent;
-} Swapchain_Etc_Etc;
+} Swapchain_Etc;
+
+typedef struct {
+    VkDevice device;
+    int graphics_queue_family_index;
+} Logical_Device_Etc;
 
 void exit_with_error(const char *msg, ...);
 void trace_log(const char *msg, ...);
 void *xmalloc(size_t bytes);
 
+void keyboard_callback(GLFWwindow *window, int key, int scancode, int action, int mods);
+
 VkInstance create_instance();
 bool check_layer_support(const char **requested_layers, int requested_layer_count);
 VkPhysicalDevice find_suitable_physical_device(VkInstance instance);
-VkDevice create_logical_device(VkPhysicalDevice physical_device);
+Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device);
 VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window);
-Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevice physical_device, VkDevice device);
-void create_image_view(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count);
+Swapchain_Etc create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_device, Logical_Device_Etc logical_device);
 VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count);
 VkFramebuffer *create_framebuffers(VkDevice device,
                                    VkRenderPass render_pass,
@@ -38,9 +44,7 @@ VkFramebuffer *create_framebuffers(VkDevice device,
                                    VkImageView *swapchain_image_views,
                                    uint32_t image_count);
 
-static int g_graphics_family_index; // TODO: What?
-
-int main(int argc, char **argv) {
+int main() {
     if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
 
     trace_log("Initialized GLFW");
@@ -53,23 +57,27 @@ int main(int argc, char **argv) {
 
     glfwMakeContextCurrent(window);
 
+    glfwSetKeyCallback(window, keyboard_callback);
+
     VkInstance instance = create_instance();
 
     trace_log("Created Vulkan instance");
 
     VkPhysicalDevice physical_device = find_suitable_physical_device(instance);
-    VkDevice device = create_logical_device(physical_device);
+    Logical_Device_Etc logical_device = create_logical_device(physical_device);
+
+    // Surface <- Swapchain image <- image view <- framebuffer?
     VkSurfaceKHR surface = create_surface(instance, window);
-    Swapchain_Etc_Etc swapchain_etc_etc = create_swapchain_etc_etc(surface, physical_device, device);
-    VkImageView *swapchain_image_views = create_image_views(device,
-                                                            swapchain_etc_etc.swapchain_image_format,
-                                                            swapchain_etc_etc.swapchain_images,
-                                                            swapchain_etc_etc.swapchain_image_count);
-    VkFramebuffer *swapchain_framebuffers = create_framebuffers(device,
+    Swapchain_Etc swapchain_etc = create_swapchain(surface, physical_device, logical_device);
+    VkImageView *swapchain_image_views = create_image_views(logical_device.device,
+                                                            swapchain_etc.swapchain_image_format,
+                                                            swapchain_etc.swapchain_images,
+                                                            swapchain_etc.swapchain_image_count);
+    VkFramebuffer *swapchain_framebuffers = create_framebuffers(logical_device.device,
                                                                 (VkRenderPass){0}, // TODO
-                                                                swapchain_etc_etc.swapchain_extent,
+                                                                swapchain_etc.swapchain_extent,
                                                                 swapchain_image_views,
-                                                                swapchain_etc_etc.swapchain_image_count);
+                                                                swapchain_etc.swapchain_image_count);
 
     trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
@@ -78,15 +86,15 @@ int main(int argc, char **argv) {
 
     trace_log("Exiting gracefully");
 
-    for (uint32_t i = 0; i < swapchain_etc_etc.swapchain_image_count; i++) {
-        vkDestroyFramebuffer(device, swapchain_framebuffers[i], NULL);
-        vkDestroyImageView(device, swapchain_image_views[i], NULL);
+    for (uint32_t i = 0; i < swapchain_etc.swapchain_image_count; i++) {
+        vkDestroyFramebuffer(logical_device.device, swapchain_framebuffers[i], NULL);
+        vkDestroyImageView(logical_device.device, swapchain_image_views[i], NULL);
     }
     free(swapchain_framebuffers);
     free(swapchain_image_views);
-    vkDestroySwapchainKHR(device, swapchain_etc_etc.swapchain, NULL);
+    vkDestroySwapchainKHR(logical_device.device, swapchain_etc.swapchain, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
-    vkDestroyDevice(device, NULL);
+    vkDestroyDevice(logical_device.device, NULL);
     vkDestroyInstance(instance, NULL);
     glfwDestroyWindow(window);
     glfwTerminate();
@@ -118,6 +126,15 @@ void *xmalloc(size_t bytes) {
     void *d = malloc(bytes);
     if (d == NULL) exit_with_error("Failed to malloc");
     return d;
+}
+
+void keyboard_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
+    (void)window; (void)key; (void)scancode; (void)action; (void)mods;
+
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        trace_log("Received ESC. Terminating...");
+        glfwSetWindowShouldClose(window, true);
+    }
 }
 
 VkInstance create_instance() {
@@ -174,11 +191,11 @@ VkInstance create_instance() {
     // NOTE: Validation layers
     const char *requested_layers[] = { "VK_LAYER_KHRONOS_validation" };
 
-    if (!check_layer_support(requested_layers, ARRAY_COUNT(requested_layers))) {
+    if (!check_layer_support(requested_layers, array_count(requested_layers))) {
         exit_with_error("Requested Vulkan layers are not available");
     }
 
-    create_info.enabledLayerCount = ARRAY_COUNT(requested_layers);
+    create_info.enabledLayerCount = array_count(requested_layers);
     create_info.ppEnabledLayerNames = requested_layers;
 
     // NOTE: Finally create VK instance
@@ -229,17 +246,14 @@ bool check_layer_support(const char **requested_layers, int requested_layer_coun
     bool layers_valid = true;
     for (int requested_layer_i = 0; requested_layer_i < requested_layer_count; requested_layer_i++) {
         bool layer_found = false;
-
         for (uint32_t available_layer_i = 0; available_layer_i < available_layer_count; available_layer_i++) {
             bool name_equals = strcmp(requested_layers[requested_layer_i],
                                       available_layers[available_layer_i].layerName) == 0;
-
             if (name_equals) {
                 layer_found = true;
                 break;
             }
         }
-
         if (!layer_found) {
             layers_valid = false;
             break;
@@ -303,15 +317,12 @@ VkPhysicalDevice find_suitable_physical_device(VkInstance instance) {
         trace_log("Device %d: %s", i, device_properties.deviceName);
     }
 
-    VkPhysicalDevice physical_device = {0};
-    if (device_count > 0) {
-        physical_device  = physical_devices[0];
-    }
+    VkPhysicalDevice physical_device = physical_devices[0];
     free(physical_devices);
     return physical_device;
 }
 
-VkDevice create_logical_device(VkPhysicalDevice physical_device) {
+Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device) {
     uint32_t queue_family_count = 0;
 
     /*
@@ -359,8 +370,6 @@ VkDevice create_logical_device(VkPhysicalDevice physical_device) {
     if (graphics_family_index == -1) {
         exit_with_error("Failed to find a suitable queue family");
     }
-
-    g_graphics_family_index = graphics_family_index;
 
     float queue_priority = 1.0f;
     /*
@@ -411,7 +420,11 @@ VkDevice create_logical_device(VkPhysicalDevice physical_device) {
 
     trace_log("Logical device created successfully");
     free(queue_families);
-    return device;
+
+    Logical_Device_Etc logical_device;
+    logical_device.device = device;
+    logical_device.graphics_queue_family_index = graphics_family_index;
+    return logical_device;
 }
 
 VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window) {
@@ -422,7 +435,7 @@ VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window) {
     return surface;
 }
 
-Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevice physical_device, VkDevice device) {
+Swapchain_Etc create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_device, Logical_Device_Etc logical_device) {
     /*
       typedef struct VkSurfaceCapabilitiesKHR {
           uint32_t                         minImageCount;
@@ -438,7 +451,6 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
       } VkSurfaceCapabilitiesKHR;
     */
     VkSurfaceCapabilitiesKHR surface_capabilities;
-
     /*
       VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
           VkPhysicalDevice                            physicalDevice,
@@ -451,7 +463,6 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, NULL);
     VkSurfaceFormatKHR *formats = xmalloc(sizeof(VkSurfaceFormatKHR) * format_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, formats);
-
     /*
       typedef struct VkSurfaceFormatKHR {
           VkFormat           format;
@@ -465,7 +476,6 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, NULL);
     VkPresentModeKHR *present_modes = xmalloc(sizeof(VkPresentModeKHR) * present_mode_count);
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes);
-
     /*
       typedef enum VkPresentModeKHR {
           VK_PRESENT_MODE_IMMEDIATE_KHR = 0,
@@ -478,6 +488,7 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
       } VkPresentModeKHR;
      */
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR; // Always available... so why did we do the previous?
+    free(present_modes);
 
     /*
       typedef struct VkExtent2D {
@@ -550,7 +561,7 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
     */
     swapchain_create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    uint32_t queue_family_indices[] = {g_graphics_family_index};
+    uint32_t queue_family_indices[] = {logical_device.graphics_queue_family_index};
     /*
       typedef enum VkSharingMode {
           VK_SHARING_MODE_EXCLUSIVE = 0,
@@ -558,11 +569,10 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
           VK_SHARING_MODE_MAX_ENUM = 0x7FFFFFFF
       } VkSharingMode;
     */
-    swapchain_create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapchain_create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; // ?
     swapchain_create_info.queueFamilyIndexCount = 1;
-    swapchain_create_info.pQueueFamilyIndices = queue_family_indices;
-
-    swapchain_create_info.preTransform = surface_capabilities.currentTransform;
+    swapchain_create_info.pQueueFamilyIndices = queue_family_indices; // ?
+    swapchain_create_info.preTransform = surface_capabilities.currentTransform; // ?
     /*
       typedef enum VkCompositeAlphaFlagBitsKHR {
           VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR = 0x00000001,
@@ -578,16 +588,19 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
     swapchain_create_info.oldSwapchain = VK_NULL_HANDLE;
 
     VkSwapchainKHR swapchain;
-    if (vkCreateSwapchainKHR(device, &swapchain_create_info, NULL, &swapchain)) {
+    if (vkCreateSwapchainKHR(logical_device.device, &swapchain_create_info, NULL, &swapchain)) {
         exit_with_error("Failed to create swapchain");
     }
 
     uint32_t swapchain_image_count = 0;
-    vkGetSwapchainImagesKHR(device, swapchain, &swapchain_image_count, NULL);
+    vkGetSwapchainImagesKHR(logical_device.device, swapchain, &swapchain_image_count, NULL);
+    /*
+      VkImage is opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkImage)
+    */
     VkImage *swapchain_images = xmalloc(sizeof(VkImage) * swapchain_image_count);
-    vkGetSwapchainImagesKHR(device, swapchain, &swapchain_image_count, swapchain_images);
+    vkGetSwapchainImagesKHR(logical_device.device, swapchain, &swapchain_image_count, swapchain_images);
 
-    Swapchain_Etc_Etc result;
+    Swapchain_Etc result;
     result.swapchain = swapchain;
     result.swapchain_image_count = swapchain_image_count;
     result.swapchain_images = swapchain_images;
@@ -597,8 +610,10 @@ Swapchain_Etc_Etc create_swapchain_etc_etc(VkSurfaceKHR surface, VkPhysicalDevic
 }
 
 VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count) {
+    /*
+      VkImageView is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkImageView)
+    */
     VkImageView *swapchain_image_views = xmalloc(sizeof(VkImageView) * image_count);
-
     for (uint32_t i = 0; i < image_count; i++) {
         /*
           typedef struct VkImageViewCreateInfo {
@@ -692,6 +707,9 @@ VkFramebuffer *create_framebuffers(VkDevice device,
                                    VkExtent2D swapchain_extent,
                                    VkImageView *swapchain_image_views,
                                    uint32_t image_count) {
+    /*
+      VkFramebuffer is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkFramebuffer)
+    */
     VkFramebuffer *swapchain_framebuffers = xmalloc(sizeof(VkFramebuffer) * image_count);
 
     for (uint32_t i = 0; i < image_count; i++) {
