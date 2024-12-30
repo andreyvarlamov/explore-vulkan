@@ -43,6 +43,7 @@ VkFramebuffer *create_framebuffers(VkDevice device,
                                    VkExtent2D swapchain_extent,
                                    VkImageView *swapchain_image_views,
                                    uint32_t image_count);
+VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format);
 
 int main() {
     if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
@@ -73,8 +74,11 @@ int main() {
                                                             swapchain_etc.swapchain_image_format,
                                                             swapchain_etc.swapchain_images,
                                                             swapchain_etc.swapchain_image_count);
+
+    VkRenderPass render_pass = create_render_pass(logical_device.device, swapchain_etc.swapchain_image_format);
+
     VkFramebuffer *swapchain_framebuffers = create_framebuffers(logical_device.device,
-                                                                (VkRenderPass){0}, // TODO
+                                                                render_pass,
                                                                 swapchain_etc.swapchain_extent,
                                                                 swapchain_image_views,
                                                                 swapchain_etc.swapchain_image_count);
@@ -92,6 +96,7 @@ int main() {
     }
     free(swapchain_framebuffers);
     free(swapchain_image_views);
+    vkDestroyRenderPass(logical_device.device, render_pass, NULL);
     vkDestroySwapchainKHR(logical_device.device, swapchain_etc.swapchain, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
     vkDestroyDevice(logical_device.device, NULL);
@@ -741,4 +746,246 @@ VkFramebuffer *create_framebuffers(VkDevice device,
     }
 
     return swapchain_framebuffers;
+}
+
+VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format) {
+    /*
+      typedef struct VkAttachmentDescription {
+           VkAttachmentDescriptionFlags    flags;
+           VkFormat                        format;
+           VkSampleCountFlagBits           samples;
+           VkAttachmentLoadOp              loadOp;
+           VkAttachmentStoreOp             storeOp;
+           VkAttachmentLoadOp              stencilLoadOp;
+           VkAttachmentStoreOp             stencilStoreOp;
+           VkImageLayout                   initialLayout;
+           VkImageLayout                   finalLayout;
+       } VkAttachmentDescription;
+    */
+    VkAttachmentDescription color_attachment = {0};
+    color_attachment.format = swapchain_image_format;
+    /*
+      typedef enum VkSampleCountFlagBits {
+          VK_SAMPLE_COUNT_1_BIT = 0x00000001,
+          VK_SAMPLE_COUNT_2_BIT = 0x00000002,
+          VK_SAMPLE_COUNT_4_BIT = 0x00000004,
+          VK_SAMPLE_COUNT_8_BIT = 0x00000008,
+          VK_SAMPLE_COUNT_16_BIT = 0x00000010,
+          VK_SAMPLE_COUNT_32_BIT = 0x00000020,
+          VK_SAMPLE_COUNT_64_BIT = 0x00000040,
+          VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkSampleCountFlagBits;
+      typedef VkFlags VkSampleCountFlags;
+    */
+    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT; // No multisampling
+    /*
+      typedef enum VkAttachmentLoadOp {
+          VK_ATTACHMENT_LOAD_OP_LOAD = 0,
+          VK_ATTACHMENT_LOAD_OP_CLEAR = 1,
+          VK_ATTACHMENT_LOAD_OP_DONT_CARE = 2,
+          VK_ATTACHMENT_LOAD_OP_NONE_KHR = 1000400000,
+          VK_ATTACHMENT_LOAD_OP_NONE_EXT = VK_ATTACHMENT_LOAD_OP_NONE_KHR,
+          VK_ATTACHMENT_LOAD_OP_MAX_ENUM = 0x7FFFFFFF
+      } VkAttachmentLoadOp;
+    */
+    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear the image at the start
+    /*
+      typedef enum VkAttachmentStoreOp {
+          VK_ATTACHMENT_STORE_OP_STORE = 0,
+          VK_ATTACHMENT_STORE_OP_DONT_CARE = 1,
+          VK_ATTACHMENT_STORE_OP_NONE = 1000301000,
+          VK_ATTACHMENT_STORE_OP_NONE_KHR = VK_ATTACHMENT_STORE_OP_NONE,
+          VK_ATTACHMENT_STORE_OP_NONE_QCOM = VK_ATTACHMENT_STORE_OP_NONE,
+          VK_ATTACHMENT_STORE_OP_NONE_EXT = VK_ATTACHMENT_STORE_OP_NONE,
+          VK_ATTACHMENT_STORE_OP_MAX_ENUM = 0x7FFFFFFF
+      } VkAttachmentStoreOp;
+    */
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // Store the rendered image
+    color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // No stencil, so no load op
+    color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // No stencil, so no store op
+    /*
+      typedef enum VkImageLayout {
+          VK_IMAGE_LAYOUT_UNDEFINED = 0,
+          VK_IMAGE_LAYOUT_GENERAL = 1,
+          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL = 2,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL = 3,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL = 4,
+          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5,
+          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL = 6,
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL = 7,
+          ...
+          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002,
+          ...
+      } VkImageLayout;
+    */
+    color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // Layout before rendering
+    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // Layout for presentation
+
+    /*
+      typedef struct VkAttachmentReference {
+          uint32_t         attachment;
+          VkImageLayout    layout;
+      } VkAttachmentReference;
+    */
+    VkAttachmentReference color_attachment_ref = {0};
+    color_attachment_ref.attachment = 0; // Index in the attachment array (in subpass)
+    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    /*
+      typedef struct VkSubpassDescription {
+          VkSubpassDescriptionFlags       flags;
+          VkPipelineBindPoint             pipelineBindPoint;
+          uint32_t                        inputAttachmentCount;
+          const VkAttachmentReference*    pInputAttachments;
+          uint32_t                        colorAttachmentCount;
+          const VkAttachmentReference*    pColorAttachments;
+          const VkAttachmentReference*    pResolveAttachments;
+          const VkAttachmentReference*    pDepthStencilAttachment;
+          uint32_t                        preserveAttachmentCount;
+          const uint32_t*                 pPreserveAttachments;
+      } VkSubpassDescription;
+    */
+    VkSubpassDescription subpass = {0};
+    /*
+      typedef enum VkPipelineBindPoint {
+          VK_PIPELINE_BIND_POINT_GRAPHICS = 0,
+          VK_PIPELINE_BIND_POINT_COMPUTE = 1,
+      #ifdef VK_ENABLE_BETA_EXTENSIONS
+          VK_PIPELINE_BIND_POINT_EXECUTION_GRAPH_AMDX = 1000134000,
+      #endif
+          VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR = 1000165000,
+          VK_PIPELINE_BIND_POINT_SUBPASS_SHADING_HUAWEI = 1000369003,
+          VK_PIPELINE_BIND_POINT_RAY_TRACING_NV = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+          VK_PIPELINE_BIND_POINT_MAX_ENUM = 0x7FFFFFFF
+      } VkPipelineBindPoint;
+    */
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_attachment_ref;
+
+    /*
+      typedef struct VkSubpassDependency {
+          uint32_t                srcSubpass;
+          uint32_t                dstSubpass;
+          VkPipelineStageFlags    srcStageMask;
+          VkPipelineStageFlags    dstStageMask;
+          VkAccessFlags           srcAccessMask;
+          VkAccessFlags           dstAccessMask;
+          VkDependencyFlags       dependencyFlags;
+      } VkSubpassDependency;
+    */
+    VkSubpassDependency dependency = {0};
+    // #define VK_SUBPASS_EXTERNAL               (~0U)
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL; // Before the render pass
+    dependency.dstSubpass = 0; // First subpass
+    /*
+      typedef enum VkPipelineStageFlagBits {
+          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = 0x00000001,
+          VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT = 0x00000002,
+          VK_PIPELINE_STAGE_VERTEX_INPUT_BIT = 0x00000004,
+          VK_PIPELINE_STAGE_VERTEX_SHADER_BIT = 0x00000008,
+          VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT = 0x00000010,
+          VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT = 0x00000020,
+          VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT = 0x00000040,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT = 0x00000080,
+          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT = 0x00000100,
+          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT = 0x00000200,
+          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT = 0x00000400,
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT = 0x00000800,
+          VK_PIPELINE_STAGE_TRANSFER_BIT = 0x00001000,
+          VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT = 0x00002000,
+          VK_PIPELINE_STAGE_HOST_BIT = 0x00004000,
+          VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT = 0x00008000,
+          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT = 0x00010000,
+          VK_PIPELINE_STAGE_NONE = 0,
+          VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT = 0x01000000,
+          VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT = 0x00040000,
+          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR = 0x02000000,
+          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR = 0x00200000,
+          VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT = 0x00800000,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR = 0x00400000,
+          VK_PIPELINE_STAGE_COMMAND_PREPROCESS_BIT_NV = 0x00020000,
+          VK_PIPELINE_STAGE_TASK_SHADER_BIT_EXT = 0x00080000,
+          VK_PIPELINE_STAGE_MESH_SHADER_BIT_EXT = 0x00100000,
+          VK_PIPELINE_STAGE_SHADING_RATE_IMAGE_BIT_NV = VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR,
+          VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_NV = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_NV = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+          VK_PIPELINE_STAGE_TASK_SHADER_BIT_NV = VK_PIPELINE_STAGE_TASK_SHADER_BIT_EXT,
+          VK_PIPELINE_STAGE_MESH_SHADER_BIT_NV = VK_PIPELINE_STAGE_MESH_SHADER_BIT_EXT,
+          VK_PIPELINE_STAGE_NONE_KHR = VK_PIPELINE_STAGE_NONE,
+          VK_PIPELINE_STAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkPipelineStageFlagBits;
+      typedef VkFlags VkPipelineStageFlags;
+    */
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    /*
+      typedef enum VkAccessFlagBits {
+          VK_ACCESS_INDIRECT_COMMAND_READ_BIT = 0x00000001,
+          VK_ACCESS_INDEX_READ_BIT = 0x00000002,
+          VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT = 0x00000004,
+          VK_ACCESS_UNIFORM_READ_BIT = 0x00000008,
+          VK_ACCESS_INPUT_ATTACHMENT_READ_BIT = 0x00000010,
+          VK_ACCESS_SHADER_READ_BIT = 0x00000020,
+          VK_ACCESS_SHADER_WRITE_BIT = 0x00000040,
+          VK_ACCESS_COLOR_ATTACHMENT_READ_BIT = 0x00000080,
+          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT = 0x00000100,
+          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT = 0x00000200,
+          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT = 0x00000400,
+          VK_ACCESS_TRANSFER_READ_BIT = 0x00000800,
+          VK_ACCESS_TRANSFER_WRITE_BIT = 0x00001000,
+          VK_ACCESS_HOST_READ_BIT = 0x00002000,
+          VK_ACCESS_HOST_WRITE_BIT = 0x00004000,
+          VK_ACCESS_MEMORY_READ_BIT = 0x00008000,
+          VK_ACCESS_MEMORY_WRITE_BIT = 0x00010000,
+          VK_ACCESS_NONE = 0,
+          VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT = 0x02000000,
+          VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT = 0x04000000,
+          VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT = 0x08000000,
+          VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT = 0x00100000,
+          VK_ACCESS_COLOR_ATTACHMENT_READ_NONCOHERENT_BIT_EXT = 0x00080000,
+          VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR = 0x00200000,
+          VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR = 0x00400000,
+          VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT = 0x01000000,
+          VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR = 0x00800000,
+          VK_ACCESS_COMMAND_PREPROCESS_READ_BIT_NV = 0x00020000,
+          VK_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV = 0x00040000,
+          VK_ACCESS_SHADING_RATE_IMAGE_READ_BIT_NV = VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR,
+          VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_NV = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR,
+          VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_NV = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+          VK_ACCESS_NONE_KHR = VK_ACCESS_NONE,
+          VK_ACCESS_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkAccessFlagBits;
+      typedef VkFlags VkAccessFlags;
+    */
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    /*
+      typedef struct VkRenderPassCreateInfo {
+          VkStructureType                   sType;
+          const void*                       pNext;
+          VkRenderPassCreateFlags           flags;
+          uint32_t                          attachmentCount;
+          const VkAttachmentDescription*    pAttachments;
+          uint32_t                          subpassCount;
+          const VkSubpassDescription*       pSubpasses;
+          uint32_t                          dependencyCount;
+          const VkSubpassDependency*        pDependencies;
+      } VkRenderPassCreateInfo;
+    */
+    VkRenderPassCreateInfo render_pass_info = {0};
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    render_pass_info.attachmentCount = 1;
+    render_pass_info.pAttachments = &color_attachment;
+    render_pass_info.subpassCount = 1;
+    render_pass_info.pSubpasses = &subpass;
+    render_pass_info.dependencyCount = 1;
+    render_pass_info.pDependencies = &dependency;
+
+    VkRenderPass render_pass;
+    if (vkCreateRenderPass(device, &render_pass_info, NULL, &render_pass) != VK_SUCCESS) {
+        exit_with_error("Failed to create render pass");
+    }
+    return render_pass;
 }
