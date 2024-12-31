@@ -35,15 +35,20 @@ VkInstance create_instance();
 bool check_layer_support(const char **requested_layers, int requested_layer_count);
 VkPhysicalDevice find_suitable_physical_device(VkInstance instance);
 Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device);
+
 VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window);
 Swapchain_Etc create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_device, Logical_Device_Etc logical_device);
+VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format);
 VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count);
 VkFramebuffer *create_framebuffers(VkDevice device,
                                    VkRenderPass render_pass,
                                    VkExtent2D swapchain_extent,
                                    VkImageView *swapchain_image_views,
                                    uint32_t image_count);
-VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format);
+
+VkShaderModule create_shader_module(VkDevice device, const char *file_name);
+VkPipelineLayout create_pipeline_layout(VkDevice device);
+VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent, VkRenderPass render_pass, VkPipelineLayout pipeline_layout);
 
 int main() {
     if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
@@ -70,18 +75,24 @@ int main() {
     // Surface <- Swapchain image <- image view <- framebuffer?
     VkSurfaceKHR surface = create_surface(instance, window);
     Swapchain_Etc swapchain_etc = create_swapchain(surface, physical_device, logical_device);
+    VkRenderPass render_pass = create_render_pass(logical_device.device, swapchain_etc.swapchain_image_format);
     VkImageView *swapchain_image_views = create_image_views(logical_device.device,
                                                             swapchain_etc.swapchain_image_format,
                                                             swapchain_etc.swapchain_images,
                                                             swapchain_etc.swapchain_image_count);
-
-    VkRenderPass render_pass = create_render_pass(logical_device.device, swapchain_etc.swapchain_image_format);
-
     VkFramebuffer *swapchain_framebuffers = create_framebuffers(logical_device.device,
                                                                 render_pass,
                                                                 swapchain_etc.swapchain_extent,
                                                                 swapchain_image_views,
                                                                 swapchain_etc.swapchain_image_count);
+
+
+    VkPipelineLayout pipeline_layout = create_pipeline_layout(logical_device.device);
+    VkPipeline pipeline = create_graphics_pipeline(logical_device.device,
+                                                   swapchain_etc.swapchain_extent,
+                                                   render_pass,
+                                                   pipeline_layout);
+
 
     trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
@@ -90,6 +101,8 @@ int main() {
 
     trace_log("Exiting gracefully");
 
+    vkDestroyPipeline(logical_device.device, pipeline, NULL);
+    vkDestroyPipelineLayout(logical_device.device, pipeline_layout, NULL);
     for (uint32_t i = 0; i < swapchain_etc.swapchain_image_count; i++) {
         vkDestroyFramebuffer(logical_device.device, swapchain_framebuffers[i], NULL);
         vkDestroyImageView(logical_device.device, swapchain_image_views[i], NULL);
@@ -614,140 +627,6 @@ Swapchain_Etc create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_d
     return result;
 }
 
-VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count) {
-    /*
-      VkImageView is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkImageView)
-    */
-    VkImageView *swapchain_image_views = xmalloc(sizeof(VkImageView) * image_count);
-    for (uint32_t i = 0; i < image_count; i++) {
-        /*
-          typedef struct VkImageViewCreateInfo {
-              VkStructureType            sType;
-              const void*                pNext;
-              VkImageViewCreateFlags     flags;
-              VkImage                    image;
-              VkImageViewType            viewType;
-              VkFormat                   format;
-              VkComponentMapping         components;
-              VkImageSubresourceRange    subresourceRange;
-          } VkImageViewCreateInfo;
-        */
-        VkImageViewCreateInfo view_info = {};
-        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        view_info.image = swapchain_images[i];
-        /*
-          typedef enum VkImageViewType {
-              VK_IMAGE_VIEW_TYPE_1D = 0,
-              VK_IMAGE_VIEW_TYPE_2D = 1,
-              VK_IMAGE_VIEW_TYPE_3D = 2,
-              VK_IMAGE_VIEW_TYPE_CUBE = 3,
-              VK_IMAGE_VIEW_TYPE_1D_ARRAY = 4,
-              VK_IMAGE_VIEW_TYPE_2D_ARRAY = 5,
-              VK_IMAGE_VIEW_TYPE_CUBE_ARRAY = 6,
-              VK_IMAGE_VIEW_TYPE_MAX_ENUM = 0x7FFFFFFF
-          } VkImageViewType;
-        */
-        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        view_info.format = swapchain_image_format;
-
-        /*
-          typedef struct VkComponentMapping {
-              VkComponentSwizzle    r;
-              VkComponentSwizzle    g;
-              VkComponentSwizzle    b;
-              VkComponentSwizzle    a;
-          } VkComponentMapping;
-         */
-        view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-        view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-        view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-        view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-        /*
-          typedef struct VkImageSubresourceRange {
-              VkImageAspectFlags    aspectMask;
-              uint32_t              baseMipLevel;
-              uint32_t              levelCount;
-              uint32_t              baseArrayLayer;
-              uint32_t              layerCount;
-          } VkImageSubresourceRange;
-        */
-        /*
-          typedef enum VkImageAspectFlagBits {
-              VK_IMAGE_ASPECT_COLOR_BIT = 0x00000001,
-              VK_IMAGE_ASPECT_DEPTH_BIT = 0x00000002,
-              VK_IMAGE_ASPECT_STENCIL_BIT = 0x00000004,
-              VK_IMAGE_ASPECT_METADATA_BIT = 0x00000008,
-              VK_IMAGE_ASPECT_PLANE_0_BIT = 0x00000010,
-              VK_IMAGE_ASPECT_PLANE_1_BIT = 0x00000020,
-              VK_IMAGE_ASPECT_PLANE_2_BIT = 0x00000040,
-              VK_IMAGE_ASPECT_NONE = 0,
-              VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT = 0x00000080,
-              VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT = 0x00000100,
-              VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT = 0x00000200,
-              VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT = 0x00000400,
-              VK_IMAGE_ASPECT_PLANE_0_BIT_KHR = VK_IMAGE_ASPECT_PLANE_0_BIT,
-              VK_IMAGE_ASPECT_PLANE_1_BIT_KHR = VK_IMAGE_ASPECT_PLANE_1_BIT,
-              VK_IMAGE_ASPECT_PLANE_2_BIT_KHR = VK_IMAGE_ASPECT_PLANE_2_BIT,
-              VK_IMAGE_ASPECT_NONE_KHR = VK_IMAGE_ASPECT_NONE,
-              VK_IMAGE_ASPECT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
-          } VkImageAspectFlagBits;
-        */
-        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        view_info.subresourceRange.baseMipLevel = 0;
-        view_info.subresourceRange.levelCount = 1;
-        view_info.subresourceRange.baseArrayLayer = 0;
-        view_info.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(device, &view_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) {
-            exit_with_error("Failed to creat image view for swapchain image %d", i);
-        }
-    }
-
-    return swapchain_image_views;
-}
-
-VkFramebuffer *create_framebuffers(VkDevice device,
-                                   VkRenderPass render_pass,
-                                   VkExtent2D swapchain_extent,
-                                   VkImageView *swapchain_image_views,
-                                   uint32_t image_count) {
-    /*
-      VkFramebuffer is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkFramebuffer)
-    */
-    VkFramebuffer *swapchain_framebuffers = xmalloc(sizeof(VkFramebuffer) * image_count);
-
-    for (uint32_t i = 0; i < image_count; i++) {
-        /*
-          typedef struct VkFramebufferCreateInfo {
-              VkStructureType             sType;
-              const void*                 pNext;
-              VkFramebufferCreateFlags    flags;
-              VkRenderPass                renderPass;
-              uint32_t                    attachmentCount;
-              const VkImageView*          pAttachments;
-              uint32_t                    width;
-              uint32_t                    height;
-              uint32_t                    layers;
-          } VkFramebufferCreateInfo;
-        */
-        VkFramebufferCreateInfo framebuffer_info = {};
-        framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass = render_pass;
-        framebuffer_info.attachmentCount = 1;
-        framebuffer_info.pAttachments = &swapchain_image_views[i];
-        framebuffer_info.width = swapchain_extent.width;
-        framebuffer_info.height = swapchain_extent.height;
-        framebuffer_info.layers = 1;
-
-        if (vkCreateFramebuffer(device, &framebuffer_info, NULL, &swapchain_framebuffers[i]) != VK_SUCCESS) {
-            exit_with_error("Failed to create framebuffer for swapchain image %d", i);
-        }
-    }
-
-    return swapchain_framebuffers;
-}
-
 VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format) {
     /*
       typedef struct VkAttachmentDescription {
@@ -983,9 +862,555 @@ VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format
     render_pass_info.dependencyCount = 1;
     render_pass_info.pDependencies = &dependency;
 
+    /*
+      VkRenderPass is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkRenderPass)
+    */
     VkRenderPass render_pass;
     if (vkCreateRenderPass(device, &render_pass_info, NULL, &render_pass) != VK_SUCCESS) {
         exit_with_error("Failed to create render pass");
     }
     return render_pass;
+}
+
+VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count) {
+    /*
+      VkImageView is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkImageView)
+    */
+    VkImageView *swapchain_image_views = xmalloc(sizeof(VkImageView) * image_count);
+    for (uint32_t i = 0; i < image_count; i++) {
+        /*
+          typedef struct VkImageViewCreateInfo {
+              VkStructureType            sType;
+              const void*                pNext;
+              VkImageViewCreateFlags     flags;
+              VkImage                    image;
+              VkImageViewType            viewType;
+              VkFormat                   format;
+              VkComponentMapping         components;
+              VkImageSubresourceRange    subresourceRange;
+          } VkImageViewCreateInfo;
+        */
+        VkImageViewCreateInfo view_info = {};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = swapchain_images[i];
+        /*
+          typedef enum VkImageViewType {
+              VK_IMAGE_VIEW_TYPE_1D = 0,
+              VK_IMAGE_VIEW_TYPE_2D = 1,
+              VK_IMAGE_VIEW_TYPE_3D = 2,
+              VK_IMAGE_VIEW_TYPE_CUBE = 3,
+              VK_IMAGE_VIEW_TYPE_1D_ARRAY = 4,
+              VK_IMAGE_VIEW_TYPE_2D_ARRAY = 5,
+              VK_IMAGE_VIEW_TYPE_CUBE_ARRAY = 6,
+              VK_IMAGE_VIEW_TYPE_MAX_ENUM = 0x7FFFFFFF
+          } VkImageViewType;
+        */
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = swapchain_image_format;
+
+        /*
+          typedef struct VkComponentMapping {
+              VkComponentSwizzle    r;
+              VkComponentSwizzle    g;
+              VkComponentSwizzle    b;
+              VkComponentSwizzle    a;
+          } VkComponentMapping;
+         */
+        view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+        /*
+          typedef struct VkImageSubresourceRange {
+              VkImageAspectFlags    aspectMask;
+              uint32_t              baseMipLevel;
+              uint32_t              levelCount;
+              uint32_t              baseArrayLayer;
+              uint32_t              layerCount;
+          } VkImageSubresourceRange;
+        */
+        /*
+          typedef enum VkImageAspectFlagBits {
+              VK_IMAGE_ASPECT_COLOR_BIT = 0x00000001,
+              VK_IMAGE_ASPECT_DEPTH_BIT = 0x00000002,
+              VK_IMAGE_ASPECT_STENCIL_BIT = 0x00000004,
+              VK_IMAGE_ASPECT_METADATA_BIT = 0x00000008,
+              VK_IMAGE_ASPECT_PLANE_0_BIT = 0x00000010,
+              VK_IMAGE_ASPECT_PLANE_1_BIT = 0x00000020,
+              VK_IMAGE_ASPECT_PLANE_2_BIT = 0x00000040,
+              VK_IMAGE_ASPECT_NONE = 0,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT = 0x00000080,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT = 0x00000100,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT = 0x00000200,
+              VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT = 0x00000400,
+              VK_IMAGE_ASPECT_PLANE_0_BIT_KHR = VK_IMAGE_ASPECT_PLANE_0_BIT,
+              VK_IMAGE_ASPECT_PLANE_1_BIT_KHR = VK_IMAGE_ASPECT_PLANE_1_BIT,
+              VK_IMAGE_ASPECT_PLANE_2_BIT_KHR = VK_IMAGE_ASPECT_PLANE_2_BIT,
+              VK_IMAGE_ASPECT_NONE_KHR = VK_IMAGE_ASPECT_NONE,
+              VK_IMAGE_ASPECT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+          } VkImageAspectFlagBits;
+        */
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(device, &view_info, NULL, &swapchain_image_views[i]) != VK_SUCCESS) {
+            exit_with_error("Failed to creat image view for swapchain image %d", i);
+        }
+    }
+
+    return swapchain_image_views;
+}
+
+VkFramebuffer *create_framebuffers(VkDevice device,
+                                   VkRenderPass render_pass,
+                                   VkExtent2D swapchain_extent,
+                                   VkImageView *swapchain_image_views,
+                                   uint32_t image_count) {
+    /*
+      VkFramebuffer is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkFramebuffer)
+    */
+    VkFramebuffer *swapchain_framebuffers = xmalloc(sizeof(VkFramebuffer) * image_count);
+
+    for (uint32_t i = 0; i < image_count; i++) {
+        /*
+          typedef struct VkFramebufferCreateInfo {
+              VkStructureType             sType;
+              const void*                 pNext;
+              VkFramebufferCreateFlags    flags;
+              VkRenderPass                renderPass;
+              uint32_t                    attachmentCount;
+              const VkImageView*          pAttachments;
+              uint32_t                    width;
+              uint32_t                    height;
+              uint32_t                    layers;
+          } VkFramebufferCreateInfo;
+        */
+        VkFramebufferCreateInfo framebuffer_info = {};
+        framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebuffer_info.renderPass = render_pass;
+        framebuffer_info.attachmentCount = 1;
+        framebuffer_info.pAttachments = &swapchain_image_views[i];
+        framebuffer_info.width = swapchain_extent.width;
+        framebuffer_info.height = swapchain_extent.height;
+        framebuffer_info.layers = 1;
+
+        if (vkCreateFramebuffer(device, &framebuffer_info, NULL, &swapchain_framebuffers[i]) != VK_SUCCESS) {
+            exit_with_error("Failed to create framebuffer for swapchain image %d", i);
+        }
+    }
+
+    return swapchain_framebuffers;
+}
+
+VkShaderModule create_shader_module(VkDevice device, const char *file_name) {
+    FILE *file = fopen(file_name, "rb");
+    if (!file) exit_with_error("Failed to open SPIR-V file: %s", file_name);
+
+    fseek(file, 0, SEEK_END);
+    size_t file_size = ftell(file);
+    rewind(file);
+
+    uint32_t *code = malloc(file_size);
+    fread(code, file_size, 1, file);
+    fclose(file);
+
+    /*
+      typedef struct VkShaderModuleCreateInfo {
+          VkStructureType              sType;
+          const void*                  pNext;
+          VkShaderModuleCreateFlags    flags;
+          size_t                       codeSize;
+          const uint32_t*              pCode;
+      } VkShaderModuleCreateInfo;
+    */
+    VkShaderModuleCreateInfo shader_module_info = {0};
+    shader_module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shader_module_info.codeSize = file_size;
+    shader_module_info.pCode = code;
+
+    /*
+      VkShaderModule is an opaque pointer: VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkShaderModule)
+    */
+    VkShaderModule shader_module;
+    if (vkCreateShaderModule(device, &shader_module_info, NULL, &shader_module) != VK_SUCCESS) {
+        exit_with_error("Failed to create shader module for file: %s", file_name);
+    }
+
+    free(code);
+    return shader_module;
+}
+
+VkPipelineLayout create_pipeline_layout(VkDevice device) {
+    // For now: empty layout as our shaders don't use external resources (no descriptor sets, no push consants)
+
+    /*
+      typedef struct VkPipelineLayoutCreateInfo {
+          VkStructureType                 sType;
+          const void*                     pNext;
+          VkPipelineLayoutCreateFlags     flags;
+          uint32_t                        setLayoutCount;
+          const VkDescriptorSetLayout*    pSetLayouts;
+          uint32_t                        pushConstantRangeCount;
+          const VkPushConstantRange*      pPushConstantRanges;
+      } VkPipelineLayoutCreateInfo;
+    */
+    VkPipelineLayoutCreateInfo layout_info = {0};
+    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 0;
+    layout_info.pSetLayouts = NULL;
+    layout_info.pushConstantRangeCount = 0;
+    layout_info.pPushConstantRanges = NULL;
+
+    VkPipelineLayout pipeline_layout;
+    if (vkCreatePipelineLayout(device, &layout_info, NULL, &pipeline_layout) != VK_SUCCESS) {
+        exit_with_error("Failed to create pipeline layout");
+    }
+
+    return pipeline_layout;
+}
+
+VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent, VkRenderPass render_pass, VkPipelineLayout pipeline_layout) {
+    VkShaderModule vert_shader_module = create_shader_module(device, "../res/shaders/bin/basic.vert.spv");
+    VkShaderModule frag_shader_module = create_shader_module(device, "../res/shaders/bin/basic.frag.spv");
+
+    /*
+      typedef struct VkPipelineShaderStageCreateInfo {
+          VkStructureType                     sType;
+          const void*                         pNext;
+          VkPipelineShaderStageCreateFlags    flags;
+          VkShaderStageFlagBits               stage;
+          VkShaderModule                      module;
+          const char*                         pName;
+          const VkSpecializationInfo*         pSpecializationInfo;
+      } VkPipelineShaderStageCreateInfo;
+    */
+    VkPipelineShaderStageCreateInfo vert_stage_info = {0};
+    vert_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    /*
+      typedef enum VkShaderStageFlagBits {
+          VK_SHADER_STAGE_VERTEX_BIT = 0x00000001,
+          VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT = 0x00000002,
+          VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT = 0x00000004,
+          VK_SHADER_STAGE_GEOMETRY_BIT = 0x00000008,
+          VK_SHADER_STAGE_FRAGMENT_BIT = 0x00000010,
+          VK_SHADER_STAGE_COMPUTE_BIT = 0x00000020,
+          VK_SHADER_STAGE_ALL_GRAPHICS = 0x0000001F,
+          VK_SHADER_STAGE_ALL = 0x7FFFFFFF,
+          VK_SHADER_STAGE_RAYGEN_BIT_KHR = 0x00000100,
+          VK_SHADER_STAGE_ANY_HIT_BIT_KHR = 0x00000200,
+          VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR = 0x00000400,
+          VK_SHADER_STAGE_MISS_BIT_KHR = 0x00000800,
+          VK_SHADER_STAGE_INTERSECTION_BIT_KHR = 0x00001000,
+          VK_SHADER_STAGE_CALLABLE_BIT_KHR = 0x00002000,
+          VK_SHADER_STAGE_TASK_BIT_EXT = 0x00000040,
+          VK_SHADER_STAGE_MESH_BIT_EXT = 0x00000080,
+          VK_SHADER_STAGE_SUBPASS_SHADING_BIT_HUAWEI = 0x00004000,
+          VK_SHADER_STAGE_CLUSTER_CULLING_BIT_HUAWEI = 0x00080000,
+          VK_SHADER_STAGE_RAYGEN_BIT_NV = VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+          VK_SHADER_STAGE_ANY_HIT_BIT_NV = VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
+          VK_SHADER_STAGE_CLOSEST_HIT_BIT_NV = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+          VK_SHADER_STAGE_MISS_BIT_NV = VK_SHADER_STAGE_MISS_BIT_KHR,
+          VK_SHADER_STAGE_INTERSECTION_BIT_NV = VK_SHADER_STAGE_INTERSECTION_BIT_KHR,
+          VK_SHADER_STAGE_CALLABLE_BIT_NV = VK_SHADER_STAGE_CALLABLE_BIT_KHR,
+          VK_SHADER_STAGE_TASK_BIT_NV = VK_SHADER_STAGE_TASK_BIT_EXT,
+          VK_SHADER_STAGE_MESH_BIT_NV = VK_SHADER_STAGE_MESH_BIT_EXT,
+          VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkShaderStageFlagBits;
+    */
+    vert_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_stage_info.module = vert_shader_module;
+    vert_stage_info.pName = "main"; // Entry point in the shader
+
+    VkPipelineShaderStageCreateInfo frag_stage_info = {0};
+    frag_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    frag_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frag_stage_info.module = frag_shader_module;
+    frag_stage_info.pName = "main"; // Entry point in the shader
+
+    VkPipelineShaderStageCreateInfo shader_stages[] = {vert_stage_info, frag_stage_info};
+
+    // Vertex Input (empty for now)
+    /*
+      typedef struct VkPipelineVertexInputStateCreateInfo {
+          VkStructureType                             sType;
+          const void*                                 pNext;
+          VkPipelineVertexInputStateCreateFlags       flags;
+          uint32_t                                    vertexBindingDescriptionCount;
+          const VkVertexInputBindingDescription*      pVertexBindingDescriptions;
+          uint32_t                                    vertexAttributeDescriptionCount;
+          const VkVertexInputAttributeDescription*    pVertexAttributeDescriptions;
+      } VkPipelineVertexInputStateCreateInfo;
+    */
+    VkPipelineVertexInputStateCreateInfo vertex_input_info = {0};
+    vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input_info.vertexBindingDescriptionCount = 0;
+    vertex_input_info.pVertexBindingDescriptions = NULL;
+    vertex_input_info.vertexAttributeDescriptionCount = 0;
+    vertex_input_info.pVertexAttributeDescriptions = NULL;
+
+    /*
+      typedef struct VkPipelineInputAssemblyStateCreateInfo {
+          VkStructureType                            sType;
+          const void*                                pNext;
+          VkPipelineInputAssemblyStateCreateFlags    flags;
+          VkPrimitiveTopology                        topology;
+          VkBool32                                   primitiveRestartEnable;
+      } VkPipelineInputAssemblyStateCreateInfo;
+    */
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_info = {0};
+    input_assembly_info.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    /*
+      typedef enum VkPrimitiveTopology {
+          VK_PRIMITIVE_TOPOLOGY_POINT_LIST = 0,
+          VK_PRIMITIVE_TOPOLOGY_LINE_LIST = 1,
+          VK_PRIMITIVE_TOPOLOGY_LINE_STRIP = 2,
+          VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST = 3,
+          VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP = 4,
+          VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN = 5,
+          VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY = 6,
+          VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY = 7,
+          VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY = 8,
+          VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY = 9,
+          VK_PRIMITIVE_TOPOLOGY_PATCH_LIST = 10,
+          VK_PRIMITIVE_TOPOLOGY_MAX_ENUM = 0x7FFFFFFF
+      } VkPrimitiveTopology;
+    */
+    input_assembly_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    input_assembly_info.primitiveRestartEnable = VK_FALSE;
+
+    /*
+      typedef struct VkViewport {
+          float    x;
+          float    y;
+          float    width;
+          float    height;
+          float    minDepth;
+          float    maxDepth;
+      } VkViewport;
+    */
+    VkViewport viewport = {0};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = (float)swapchain_extent.width;
+    viewport.height = (float)swapchain_extent.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    /*
+      typedef struct VkOffset2D {
+          int32_t    x;
+          int32_t    y;
+      } VkOffset2D;
+
+      typedef struct VkExtent2D {
+          uint32_t    width;
+          uint32_t    height;
+      } VkExtent2D;
+
+      typedef struct VkRect2D {
+          VkOffset2D    offset;
+          VkExtent2D    extent;
+      } VkRect2D;
+    */
+    VkRect2D scissor = {0};
+    scissor.offset = (VkOffset2D){0, 0};
+    scissor.extent = swapchain_extent;
+
+    /*
+      typedef struct VkPipelineViewportStateCreateInfo {
+          VkStructureType                       sType;
+          const void*                           pNext;
+          VkPipelineViewportStateCreateFlags    flags;
+          uint32_t                              viewportCount;
+          const VkViewport*                     pViewports;
+          uint32_t                              scissorCount;
+          const VkRect2D*                       pScissors;
+      } VkPipelineViewportStateCreateInfo;
+    */
+    VkPipelineViewportStateCreateInfo viewport_state_info = {0};
+    viewport_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state_info.viewportCount = 1;
+    viewport_state_info.pViewports = &viewport;
+    viewport_state_info.scissorCount = 1;
+    viewport_state_info.pScissors = &scissor;
+
+    /*
+      typedef struct VkPipelineRasterizationStateCreateInfo {
+          VkStructureType                            sType;
+          const void*                                pNext;
+          VkPipelineRasterizationStateCreateFlags    flags;
+          VkBool32                                   depthClampEnable;
+          VkBool32                                   rasterizerDiscardEnable;
+          VkPolygonMode                              polygonMode;
+          VkCullModeFlags                            cullMode;
+          VkFrontFace                                frontFace;
+          VkBool32                                   depthBiasEnable;
+          float                                      depthBiasConstantFactor;
+          float                                      depthBiasClamp;
+          float                                      depthBiasSlopeFactor;
+          float                                      lineWidth;
+      } VkPipelineRasterizationStateCreateInfo;
+    */
+    VkPipelineRasterizationStateCreateInfo rasterization_state_info = {0};
+    rasterization_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterization_state_info.depthClampEnable = VK_FALSE;
+    rasterization_state_info.rasterizerDiscardEnable = VK_FALSE;
+
+    /*
+      typedef enum VkPolygonMode {
+          VK_POLYGON_MODE_FILL = 0,
+          VK_POLYGON_MODE_LINE = 1,
+          VK_POLYGON_MODE_POINT = 2,
+          VK_POLYGON_MODE_FILL_RECTANGLE_NV = 1000153000,
+          VK_POLYGON_MODE_MAX_ENUM = 0x7FFFFFFF
+      } VkPolygonMode;
+    */
+    rasterization_state_info.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterization_state_info.lineWidth = 1.0f;
+    /*
+      typedef enum VkCullModeFlagBits {
+          VK_CULL_MODE_NONE = 0,
+          VK_CULL_MODE_FRONT_BIT = 0x00000001,
+          VK_CULL_MODE_BACK_BIT = 0x00000002,
+          VK_CULL_MODE_FRONT_AND_BACK = 0x00000003,
+          VK_CULL_MODE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkCullModeFlagBits;
+    */
+    rasterization_state_info.cullMode = VK_CULL_MODE_BACK_BIT;
+    /*
+      typedef enum VkFrontFace {
+          VK_FRONT_FACE_COUNTER_CLOCKWISE = 0,
+          VK_FRONT_FACE_CLOCKWISE = 1,
+          VK_FRONT_FACE_MAX_ENUM = 0x7FFFFFFF
+      } VkFrontFace;
+    */
+    rasterization_state_info.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterization_state_info.depthBiasEnable = VK_FALSE;
+
+    // Multisampling (disabled for now)
+    /*
+      typedef struct VkPipelineMultisampleStateCreateInfo {
+          VkStructureType                          sType;
+          const void*                              pNext;
+          VkPipelineMultisampleStateCreateFlags    flags;
+          VkSampleCountFlagBits                    rasterizationSamples;
+          VkBool32                                 sampleShadingEnable;
+          float                                    minSampleShading;
+          const VkSampleMask*                      pSampleMask;
+          VkBool32                                 alphaToCoverageEnable;
+          VkBool32                                 alphaToOneEnable;
+      } VkPipelineMultisampleStateCreateInfo;
+    */
+    VkPipelineMultisampleStateCreateInfo multisample_state_info = {0};
+    multisample_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample_state_info.sampleShadingEnable = VK_FALSE;
+    /*
+      typedef enum VkSampleCountFlagBits {
+          VK_SAMPLE_COUNT_1_BIT = 0x00000001,
+          VK_SAMPLE_COUNT_2_BIT = 0x00000002,
+          VK_SAMPLE_COUNT_4_BIT = 0x00000004,
+          VK_SAMPLE_COUNT_8_BIT = 0x00000008,
+          VK_SAMPLE_COUNT_16_BIT = 0x00000010,
+          VK_SAMPLE_COUNT_32_BIT = 0x00000020,
+          VK_SAMPLE_COUNT_64_BIT = 0x00000040,
+          VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkSampleCountFlagBits;
+    */
+    multisample_state_info.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Color blending (disabled for now)
+    /*
+      typedef struct VkPipelineColorBlendAttachmentState {
+          VkBool32                 blendEnable;
+          VkBlendFactor            srcColorBlendFactor;
+          VkBlendFactor            dstColorBlendFactor;
+          VkBlendOp                colorBlendOp;
+          VkBlendFactor            srcAlphaBlendFactor;
+          VkBlendFactor            dstAlphaBlendFactor;
+          VkBlendOp                alphaBlendOp;
+          VkColorComponentFlags    colorWriteMask;
+      } VkPipelineColorBlendAttachmentState;
+    */
+    VkPipelineColorBlendAttachmentState color_blend_attachment = {0};
+    /*
+      typedef enum VkColorComponentFlagBits {
+          VK_COLOR_COMPONENT_R_BIT = 0x00000001,
+          VK_COLOR_COMPONENT_G_BIT = 0x00000002,
+          VK_COLOR_COMPONENT_B_BIT = 0x00000004,
+          VK_COLOR_COMPONENT_A_BIT = 0x00000008,
+          VK_COLOR_COMPONENT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkColorComponentFlagBits;
+    */
+    color_blend_attachment.colorWriteMask = (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
+    color_blend_attachment.blendEnable = VK_FALSE;
+
+    /*
+      typedef struct VkPipelineColorBlendStateCreateInfo {
+          VkStructureType                               sType;
+          const void*                                   pNext;
+          VkPipelineColorBlendStateCreateFlags          flags;
+          VkBool32                                      logicOpEnable;
+          VkLogicOp                                     logicOp;
+          uint32_t                                      attachmentCount;
+          const VkPipelineColorBlendAttachmentState*    pAttachments;
+          float                                         blendConstants[4];
+      } VkPipelineColorBlendStateCreateInfo;
+    */
+    VkPipelineColorBlendStateCreateInfo color_blend_state_info = {0};
+    color_blend_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blend_state_info.logicOpEnable = VK_FALSE;
+    color_blend_state_info.attachmentCount = 1;
+    color_blend_state_info.pAttachments = &color_blend_attachment;
+
+    /*
+      typedef struct VkGraphicsPipelineCreateInfo {
+          VkStructureType                                  sType;
+          const void*                                      pNext;
+          VkPipelineCreateFlags                            flags;
+          uint32_t                                         stageCount;
+          const VkPipelineShaderStageCreateInfo*           pStages;
+          const VkPipelineVertexInputStateCreateInfo*      pVertexInputState;
+          const VkPipelineInputAssemblyStateCreateInfo*    pInputAssemblyState;
+          const VkPipelineTessellationStateCreateInfo*     pTessellationState;
+          const VkPipelineViewportStateCreateInfo*         pViewportState;
+          const VkPipelineRasterizationStateCreateInfo*    pRasterizationState;
+          const VkPipelineMultisampleStateCreateInfo*      pMultisampleState;
+          const VkPipelineDepthStencilStateCreateInfo*     pDepthStencilState;
+          const VkPipelineColorBlendStateCreateInfo*       pColorBlendState;
+          const VkPipelineDynamicStateCreateInfo*          pDynamicState;
+          VkPipelineLayout                                 layout;
+          VkRenderPass                                     renderPass;
+          uint32_t                                         subpass;
+          VkPipeline                                       basePipelineHandle;
+          int32_t                                          basePipelineIndex;
+      } VkGraphicsPipelineCreateInfo;
+    */
+    VkGraphicsPipelineCreateInfo pipeline_info = {0};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount = 2;
+    pipeline_info.pStages = shader_stages;
+    pipeline_info.pVertexInputState = &vertex_input_info;
+    pipeline_info.pInputAssemblyState = &input_assembly_info;
+    pipeline_info.pViewportState = &viewport_state_info;
+    pipeline_info.pRasterizationState = &rasterization_state_info;
+    pipeline_info.pMultisampleState = &multisample_state_info;
+    pipeline_info.pColorBlendState = &color_blend_state_info;
+    pipeline_info.layout = pipeline_layout;
+    pipeline_info.renderPass = render_pass;
+    pipeline_info.subpass = 0; // TODO: Didn't we define this before?
+
+    VkPipeline pipeline;
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &pipeline) != VK_SUCCESS) {
+        exit_with_error("Failed to create graphics pipeline");
+    }
+
+    vkDestroyShaderModule(device, vert_shader_module, NULL);
+    vkDestroyShaderModule(device, frag_shader_module, NULL);
+
+    return pipeline;
 }
