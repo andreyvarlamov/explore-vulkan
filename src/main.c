@@ -1,5 +1,6 @@
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,11 @@ typedef struct {
     int graphics_queue_family_index;
 } Logical_Device_Etc;
 
+typedef struct {
+    float position[2];
+    float color[3];
+} Vertex;
+
 void exit_with_error(const char *msg, ...);
 void trace_log(const char *msg, ...);
 void *xmalloc(size_t bytes);
@@ -48,6 +54,8 @@ VkFramebuffer *create_framebuffers(VkDevice device,
 
 VkShaderModule create_shader_module(VkDevice device, const char *file_name);
 VkPipelineLayout create_pipeline_layout(VkDevice device);
+VkVertexInputBindingDescription get_binding_description();
+VkVertexInputAttributeDescription *get_attribute_descriptions();
 VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent, VkRenderPass render_pass, VkPipelineLayout pipeline_layout);
 
 int main() {
@@ -1073,6 +1081,56 @@ VkPipelineLayout create_pipeline_layout(VkDevice device) {
     return pipeline_layout;
 }
 
+
+VkVertexInputBindingDescription get_binding_description() {
+    /*
+      typedef struct VkVertexInputBindingDescription {
+          uint32_t             binding;
+          uint32_t             stride;
+          VkVertexInputRate    inputRate;
+      } VkVertexInputBindingDescription;
+    */
+    VkVertexInputBindingDescription binding_description = {0};
+    binding_description.binding = 0; // Binding index in the vertex buffer
+    binding_description.stride = sizeof(Vertex);
+    /*
+      typedef enum VkVertexInputRate {
+          VK_VERTEX_INPUT_RATE_VERTEX = 0,
+          VK_VERTEX_INPUT_RATE_INSTANCE = 1,
+          VK_VERTEX_INPUT_RATE_MAX_ENUM = 0x7FFFFFFF
+      } VkVertexInputRate;
+    */
+    binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX; // Per vertex data
+
+    return binding_description;
+}
+
+VkVertexInputAttributeDescription *get_attribute_descriptions() {
+    /*
+      typedef struct VkVertexInputAttributeDescription {
+          uint32_t    location;
+          uint32_t    binding;
+          VkFormat    format;
+          uint32_t    offset;
+      } VkVertexInputAttributeDescription;
+    */
+    static VkVertexInputAttributeDescription attribute_descriptions[2] = {0};
+
+    // Position
+    attribute_descriptions[0].binding = 0; // Binding index
+    attribute_descriptions[0].location = 0; // Location in shader
+    attribute_descriptions[0].format = VK_FORMAT_R32G32_SFLOAT; // vec2 -- 2 floats
+    attribute_descriptions[0].offset = offsetof(Vertex, position);
+
+    // Color
+    attribute_descriptions[1].binding = 0; // Binding index
+    attribute_descriptions[1].location = 1; // Location in shader
+    attribute_descriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3 -- 3 floats
+    attribute_descriptions[1].offset = offsetof(Vertex, color);
+
+    return attribute_descriptions;
+}
+
 VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent, VkRenderPass render_pass, VkPipelineLayout pipeline_layout) {
     VkShaderModule vert_shader_module = create_shader_module(device, "../res/shaders/bin/basic.vert.spv");
     VkShaderModule frag_shader_module = create_shader_module(device, "../res/shaders/bin/basic.frag.spv");
@@ -1133,7 +1191,7 @@ VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent
 
     VkPipelineShaderStageCreateInfo shader_stages[] = {vert_stage_info, frag_stage_info};
 
-    // Vertex Input (empty for now)
+    // Vertex Input
     /*
       typedef struct VkPipelineVertexInputStateCreateInfo {
           VkStructureType                             sType;
@@ -1147,10 +1205,14 @@ VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent
     */
     VkPipelineVertexInputStateCreateInfo vertex_input_info = {0};
     vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input_info.vertexBindingDescriptionCount = 0;
-    vertex_input_info.pVertexBindingDescriptions = NULL;
-    vertex_input_info.vertexAttributeDescriptionCount = 0;
-    vertex_input_info.pVertexAttributeDescriptions = NULL;
+
+    VkVertexInputBindingDescription binding_description = get_binding_description();
+    vertex_input_info.vertexBindingDescriptionCount = 1;
+    vertex_input_info.pVertexBindingDescriptions = &binding_description;
+
+    VkVertexInputAttributeDescription *attribute_descriptions = get_attribute_descriptions();
+    vertex_input_info.vertexAttributeDescriptionCount = 2;
+    vertex_input_info.pVertexAttributeDescriptions = attribute_descriptions;
 
     /*
       typedef struct VkPipelineInputAssemblyStateCreateInfo {
