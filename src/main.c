@@ -31,6 +31,17 @@ typedef struct {
     float color[3];
 } Vertex;
 
+typedef struct {
+    VkBuffer buffer;
+    VkDeviceMemory buffer_memory;
+} Vertex_Buffer_Etc;
+
+static Vertex vertices[] = {
+    {{ 0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{ 0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}}
+};
+
 void exit_with_error(const char *msg, ...);
 void trace_log(const char *msg, ...);
 void *xmalloc(size_t bytes);
@@ -57,6 +68,9 @@ VkPipelineLayout create_pipeline_layout(VkDevice device);
 VkVertexInputBindingDescription get_binding_description();
 VkVertexInputAttributeDescription *get_attribute_descriptions();
 VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent, VkRenderPass render_pass, VkPipelineLayout pipeline_layout);
+uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties);
+Vertex_Buffer_Etc create_vertex_buffer(VkDevice device, VkPhysicalDevice physical_device);
+void destroy_vertex_buffer(VkDevice device, Vertex_Buffer_Etc vertex_buffer);
 
 int main() {
     if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
@@ -100,7 +114,7 @@ int main() {
                                                    swapchain_etc.swapchain_extent,
                                                    render_pass,
                                                    pipeline_layout);
-
+    Vertex_Buffer_Etc vertex_buffer_etc = create_vertex_buffer(logical_device.device, physical_device);
 
     trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
@@ -109,6 +123,7 @@ int main() {
 
     trace_log("Exiting gracefully");
 
+    destroy_vertex_buffer(logical_device.device, vertex_buffer_etc);
     vkDestroyPipeline(logical_device.device, pipeline, NULL);
     vkDestroyPipelineLayout(logical_device.device, pipeline_layout, NULL);
     for (uint32_t i = 0; i < swapchain_etc.swapchain_image_count; i++) {
@@ -1475,4 +1490,200 @@ VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent
     vkDestroyShaderModule(device, frag_shader_module, NULL);
 
     return pipeline;
+}
+
+uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties) {
+    /*
+      typedef struct VkMemoryType {
+          VkMemoryPropertyFlags    propertyFlags;
+          uint32_t                 heapIndex;
+      } VkMemoryType;
+
+      typedef enum VkMemoryHeapFlagBits {
+          VK_MEMORY_HEAP_DEVICE_LOCAL_BIT = 0x00000001,
+          VK_MEMORY_HEAP_MULTI_INSTANCE_BIT = 0x00000002,
+          VK_MEMORY_HEAP_MULTI_INSTANCE_BIT_KHR = VK_MEMORY_HEAP_MULTI_INSTANCE_BIT,
+          VK_MEMORY_HEAP_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkMemoryHeapFlagBits;
+
+      typedef struct VkMemoryHeap {
+          VkDeviceSize         size;
+          VkMemoryHeapFlags    flags;
+      } VkMemoryHeap;
+
+      typedef struct VkPhysicalDeviceMemoryProperties {
+          uint32_t        memoryTypeCount;
+          VkMemoryType    memoryTypes[VK_MAX_MEMORY_TYPES];
+          uint32_t        memoryHeapCount;
+          VkMemoryHeap    memoryHeaps[VK_MAX_MEMORY_HEAPS];
+      } VkPhysicalDeviceMemoryProperties;
+    */
+    VkPhysicalDeviceMemoryProperties mem_properties;
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
+
+    bool memory_type_index_found = false;
+    uint32_t memory_type_index = 0;
+    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
+        if ((type_filter & (1 << i)) && ((mem_properties.memoryTypes[i].propertyFlags & properties) == properties)) {
+            memory_type_index_found = true;
+            memory_type_index = i;
+        }
+    }
+
+    if (!memory_type_index_found) {
+        exit_with_error("Failed to find suitable memory type");
+    }
+
+    return memory_type_index;
+}
+
+Vertex_Buffer_Etc create_vertex_buffer(VkDevice device, VkPhysicalDevice physical_device) {
+    // typedef uint64_t VkDeviceSize;
+    VkDeviceSize buffer_size = sizeof(vertices);
+
+    /*
+      typedef struct VkBufferCreateInfo {
+          VkStructureType        sType;
+          const void*            pNext;
+          VkBufferCreateFlags    flags;
+          VkDeviceSize           size;
+          VkBufferUsageFlags     usage;
+          VkSharingMode          sharingMode;
+          uint32_t               queueFamilyIndexCount;
+          const uint32_t*        pQueueFamilyIndices;
+      } VkBufferCreateInfo;
+    */
+    VkBufferCreateInfo buffer_info = {0};
+    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_info.size = buffer_size;
+    /*
+      typedef enum VkBufferUsageFlagBits {
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT = 0x00000001,
+          VK_BUFFER_USAGE_TRANSFER_DST_BIT = 0x00000002,
+          VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT = 0x00000004,
+          VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT = 0x00000008,
+          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT = 0x00000010,
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = 0x00000020,
+          VK_BUFFER_USAGE_INDEX_BUFFER_BIT = 0x00000040,
+          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT = 0x00000080,
+          VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = 0x00000100,
+          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 0x00020000,
+          VK_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR = 0x00002000,
+          VK_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR = 0x00004000,
+          VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT = 0x00000800,
+          VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT = 0x00001000,
+          VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT = 0x00000200,
+      #ifdef VK_ENABLE_BETA_EXTENSIONS
+          VK_BUFFER_USAGE_EXECUTION_GRAPH_SCRATCH_BIT_AMDX = 0x02000000,
+      #endif
+          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR = 0x00080000,
+          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR = 0x00100000,
+          VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR = 0x00000400,
+          VK_BUFFER_USAGE_VIDEO_ENCODE_DST_BIT_KHR = 0x00008000,
+          VK_BUFFER_USAGE_VIDEO_ENCODE_SRC_BIT_KHR = 0x00010000,
+          VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT = 0x00200000,
+          VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT = 0x00400000,
+          VK_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT = 0x04000000,
+          VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT = 0x00800000,
+          VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT = 0x01000000,
+          VK_BUFFER_USAGE_RAY_TRACING_BIT_NV = VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
+          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_EXT = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+          VK_BUFFER_USAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkBufferUsageFlagBits;
+    */
+    buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    /*
+      typedef enum VkSharingMode {
+          VK_SHARING_MODE_EXCLUSIVE = 0,
+          VK_SHARING_MODE_CONCURRENT = 1,
+          VK_SHARING_MODE_MAX_ENUM = 0x7FFFFFFF
+      } VkSharingMode;
+    */
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkBuffer vertex_buffer;
+    if (vkCreateBuffer(device, &buffer_info, NULL, &vertex_buffer) != VK_SUCCESS) {
+        exit_with_error("Failed to create vertex buffer");
+    }
+
+    // Allocate memory for the buffer
+    /*
+      typedef struct VkMemoryRequirements {
+          VkDeviceSize    size;
+          VkDeviceSize    alignment;
+          uint32_t        memoryTypeBits;
+      } VkMemoryRequirements;
+    */
+    VkMemoryRequirements mem_requirements;
+    vkGetBufferMemoryRequirements(device, vertex_buffer, &mem_requirements);
+
+    /*
+      typedef struct VkMemoryAllocateInfo {
+          VkStructureType    sType;
+          const void*        pNext;
+          VkDeviceSize       allocationSize;
+          uint32_t           memoryTypeIndex;
+      } VkMemoryAllocateInfo;
+    */
+    VkMemoryAllocateInfo alloc_info = {0};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_requirements.size;
+    /*
+      typedef enum VkMemoryPropertyFlagBits {
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = 0x00000001,
+          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = 0x00000002,
+          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = 0x00000004,
+          VK_MEMORY_PROPERTY_HOST_CACHED_BIT = 0x00000008,
+          VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT = 0x00000010,
+          VK_MEMORY_PROPERTY_PROTECTED_BIT = 0x00000020,
+          VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD = 0x00000040,
+          VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD = 0x00000080,
+          VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV = 0x00000100,
+          VK_MEMORY_PROPERTY_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkMemoryPropertyFlagBits;
+      typedef VkFlags VkMemoryPropertyFlags;
+    */
+    alloc_info.memoryTypeIndex = find_memory_type(physical_device,
+                                                  mem_requirements.memoryTypeBits,
+                                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDeviceMemory)
+    VkDeviceMemory vertex_buffer_memory;
+    if (vkAllocateMemory(device, &alloc_info, NULL, &vertex_buffer_memory) != VK_SUCCESS) {
+        exit_with_error("Failed to allocate vertex buffer memory");
+    }
+
+    /*
+      VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(
+          VkDevice                                    device,
+          VkBuffer                                    buffer,
+          VkDeviceMemory                              memory,
+          VkDeviceSize                                memoryOffset);
+    */
+    vkBindBufferMemory(device, vertex_buffer, vertex_buffer_memory, 0);
+
+    void *data;
+    /*
+      VKAPI_ATTR VkResult VKAPI_CALL vkMapMemory(
+          VkDevice                                    device,
+          VkDeviceMemory                              memory,
+          VkDeviceSize                                offset,
+          VkDeviceSize                                size,
+          VkMemoryMapFlags                            flags,
+          void**                                      ppData);
+    */
+    vkMapMemory(device, vertex_buffer_memory, 0, buffer_size, 0, &data);
+    memcpy(data, vertices, (size_t)buffer_size);
+    vkUnmapMemory(device, vertex_buffer_memory);
+
+    Vertex_Buffer_Etc result = {0};
+    result.buffer = vertex_buffer;
+    result.buffer_memory = vertex_buffer_memory;
+    return result;
+}
+
+void destroy_vertex_buffer(VkDevice device, Vertex_Buffer_Etc vertex_buffer) {
+    vkDestroyBuffer(device, vertex_buffer.buffer, NULL);
+    vkFreeMemory(device, vertex_buffer.buffer_memory, NULL);
 }
