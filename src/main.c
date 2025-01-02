@@ -23,7 +23,10 @@ typedef struct {
 
 typedef struct {
     VkDevice device;
-    int graphics_queue_family_index;
+    VkQueue graphics_queue;
+    uint32_t graphics_queue_family_index;
+    VkQueue present_queue;
+    uint32_t present_queue_family_index;
 } Logical_Device_Etc;
 
 typedef struct {
@@ -35,6 +38,12 @@ typedef struct {
     VkBuffer buffer;
     VkDeviceMemory buffer_memory;
 } Vertex_Buffer_Etc;
+
+typedef struct {
+    VkSemaphore image_available_semaphore;
+    VkSemaphore render_finished_semaphore;
+    VkFence in_flight_fence;
+} Synchronization_Objects;
 
 static Vertex vertices[] = {
     {{ 0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
@@ -51,9 +60,10 @@ void keyboard_callback(GLFWwindow *window, int key, int scancode, int action, in
 VkInstance create_instance();
 bool check_layer_support(const char **requested_layers, int requested_layer_count);
 VkPhysicalDevice find_suitable_physical_device(VkInstance instance);
-Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device);
 
 VkSurfaceKHR create_surface(VkInstance instance, GLFWwindow *window);
+Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device, VkSurfaceKHR surface);
+
 Swapchain_Etc create_swapchain(VkSurfaceKHR surface, VkPhysicalDevice physical_device, Logical_Device_Etc logical_device);
 VkRenderPass create_render_pass(VkDevice device, VkFormat swapchain_image_format);
 VkImageView *create_image_views(VkDevice device, VkFormat swapchain_image_format, VkImage *swapchain_images, uint32_t image_count);
@@ -71,6 +81,29 @@ VkPipeline create_graphics_pipeline(VkDevice device, VkExtent2D swapchain_extent
 uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties);
 Vertex_Buffer_Etc create_vertex_buffer(VkDevice device, VkPhysicalDevice physical_device);
 void destroy_vertex_buffer(VkDevice device, Vertex_Buffer_Etc vertex_buffer);
+
+VkCommandPool create_command_pool(VkDevice device, uint32_t queue_family_index);
+VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool command_pool);
+void record_command_buffer(VkCommandBuffer command_buffer,
+                           VkRenderPass render_pass,
+                           VkFramebuffer framebuffer,
+                           VkPipeline pipeline,
+                           VkBuffer vertex_buffer,
+                           VkExtent2D swapchain_extent);
+
+Synchronization_Objects create_synchronization_objects(VkDevice device);
+void destroy_synchronization_objects(VkDevice device, Synchronization_Objects *sync);
+
+void draw_frame(VkDevice device,
+                Swapchain_Etc swapchain_etc,
+                VkFramebuffer *swapchain_framebuffers,
+                VkRenderPass render_pass,
+                VkPipeline pipeline,
+                VkBuffer vertex_buffer,
+                VkQueue graphics_queue,
+                VkQueue present_queue,
+                VkCommandBuffer command_buffer,
+                Synchronization_Objects *sync);
 
 int main() {
     if (!glfwInit()) exit_with_error("Failed to intialize GLFW");
@@ -92,10 +125,11 @@ int main() {
     trace_log("Created Vulkan instance");
 
     VkPhysicalDevice physical_device = find_suitable_physical_device(instance);
-    Logical_Device_Etc logical_device = create_logical_device(physical_device);
+
+    VkSurfaceKHR surface = create_surface(instance, window);
+    Logical_Device_Etc logical_device = create_logical_device(physical_device, surface);
 
     // Surface <- Swapchain image <- image view <- framebuffer?
-    VkSurfaceKHR surface = create_surface(instance, window);
     Swapchain_Etc swapchain_etc = create_swapchain(surface, physical_device, logical_device);
     VkRenderPass render_pass = create_render_pass(logical_device.device, swapchain_etc.swapchain_image_format);
     VkImageView *swapchain_image_views = create_image_views(logical_device.device,
@@ -108,7 +142,6 @@ int main() {
                                                                 swapchain_image_views,
                                                                 swapchain_etc.swapchain_image_count);
 
-
     VkPipelineLayout pipeline_layout = create_pipeline_layout(logical_device.device);
     VkPipeline pipeline = create_graphics_pipeline(logical_device.device,
                                                    swapchain_etc.swapchain_extent,
@@ -116,13 +149,30 @@ int main() {
                                                    pipeline_layout);
     Vertex_Buffer_Etc vertex_buffer_etc = create_vertex_buffer(logical_device.device, physical_device);
 
+    VkCommandPool command_pool = create_command_pool(logical_device.device, logical_device.graphics_queue_family_index);
+    VkCommandBuffer command_buffer = allocate_command_buffer(logical_device.device, command_pool);
+    Synchronization_Objects synchronization_objects = create_synchronization_objects(logical_device.device);
+
     trace_log("Entering main loop");
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        draw_frame(logical_device.device,
+                   swapchain_etc,
+                   swapchain_framebuffers,
+                   render_pass,
+                   pipeline,
+                   vertex_buffer_etc.buffer,
+                   logical_device.graphics_queue,
+                   logical_device.present_queue,
+                   command_buffer,
+                   &synchronization_objects);
     }
 
     trace_log("Exiting gracefully");
 
+    vkDeviceWaitIdle(logical_device.device);
+    destroy_synchronization_objects(logical_device.device, &synchronization_objects);
+    vkDestroyCommandPool(logical_device.device, command_pool, NULL);
     destroy_vertex_buffer(logical_device.device, vertex_buffer_etc);
     vkDestroyPipeline(logical_device.device, pipeline, NULL);
     vkDestroyPipelineLayout(logical_device.device, pipeline_layout, NULL);
@@ -363,7 +413,7 @@ VkPhysicalDevice find_suitable_physical_device(VkInstance instance) {
     return physical_device;
 }
 
-Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device) {
+Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device, VkSurfaceKHR surface) {
     uint32_t queue_family_count = 0;
 
     /*
@@ -385,7 +435,8 @@ Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device) {
     VkQueueFamilyProperties *queue_families = xmalloc(sizeof(VkQueueFamilyProperties) * queue_family_count);
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, queue_families);
 
-    int graphics_family_index = -1;
+    int graphics_queue_family_index = -1;
+    int present_queue_family_index = -1;
     for (uint32_t i = 0; i < queue_family_count; i++) {
         /*
           typedef enum VkQueueFlagBits {
@@ -403,14 +454,24 @@ Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device) {
           typedef VkFlags VkDeviceCreateFlags;
          */
         if (queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            graphics_family_index = i;
+            graphics_queue_family_index = (int)i;
+        }
+
+        VkBool32 present_support = VK_FALSE;
+        vkGetPhysicalDeviceSurfaceSupportKHR(physical_device, i, surface, &present_support);
+
+        if (present_support) {
+            present_queue_family_index = (int)i;
+        }
+
+        if (graphics_queue_family_index != -1 && present_queue_family_index != -1) {
             break;
         }
     }
-
-    if (graphics_family_index == -1) {
-        exit_with_error("Failed to find a suitable queue family");
+    if (graphics_queue_family_index == -1 || present_queue_family_index == -1) {
+        exit_with_error("Failed to find graphics and present queue family when creating logical device");
     }
+    free(queue_families);
 
     float queue_priority = 1.0f;
     /*
@@ -425,7 +486,7 @@ Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device) {
     */
     VkDeviceQueueCreateInfo queue_create_info = {};
     queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_create_info.queueFamilyIndex = graphics_family_index;
+    queue_create_info.queueFamilyIndex = graphics_queue_family_index;
     queue_create_info.queueCount = 1;
     queue_create_info.pQueuePriorities = &queue_priority;
 
@@ -460,11 +521,13 @@ Logical_Device_Etc create_logical_device(VkPhysicalDevice physical_device) {
     }
 
     trace_log("Logical device created successfully");
-    free(queue_families);
 
-    Logical_Device_Etc logical_device;
+    Logical_Device_Etc logical_device = {0};
     logical_device.device = device;
-    logical_device.graphics_queue_family_index = graphics_family_index;
+    logical_device.graphics_queue_family_index = (uint32_t)graphics_queue_family_index;
+    logical_device.present_queue_family_index = (uint32_t)present_queue_family_index;
+    vkGetDeviceQueue(device, graphics_queue_family_index, 0, &logical_device.graphics_queue);
+    vkGetDeviceQueue(device, present_queue_family_index, 0, &logical_device.present_queue);
     return logical_device;
 }
 
@@ -1686,4 +1749,308 @@ Vertex_Buffer_Etc create_vertex_buffer(VkDevice device, VkPhysicalDevice physica
 void destroy_vertex_buffer(VkDevice device, Vertex_Buffer_Etc vertex_buffer) {
     vkDestroyBuffer(device, vertex_buffer.buffer, NULL);
     vkFreeMemory(device, vertex_buffer.buffer_memory, NULL);
+}
+
+VkCommandPool create_command_pool(VkDevice device, uint32_t queue_family_index) {
+    /*
+      typedef struct VkCommandPoolCreateInfo {
+         VkStructureType             sType;
+         const void*                 pNext;
+         VkCommandPoolCreateFlags    flags;
+         uint32_t                    queueFamilyIndex;
+     } VkCommandPoolCreateInfo;
+    */
+    VkCommandPoolCreateInfo command_pool_info = {0};
+    command_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    command_pool_info.queueFamilyIndex = queue_family_index; // Graphics queue family
+    /*
+      typedef enum VkCommandPoolCreateFlagBits {
+          VK_COMMAND_POOL_CREATE_TRANSIENT_BIT = 0x00000001,
+          VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT = 0x00000002,
+          VK_COMMAND_POOL_CREATE_PROTECTED_BIT = 0x00000004,
+          VK_COMMAND_POOL_CREATE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkCommandPoolCreateFlagBits;
+    */
+    command_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+    VkCommandPool command_pool;
+    if (vkCreateCommandPool(device, &command_pool_info, NULL, &command_pool) != VK_SUCCESS) {
+        exit_with_error("Failed to create command pool");
+    }
+
+    return command_pool;
+}
+
+VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool command_pool) {
+    /*
+      typedef struct VkCommandBufferAllocateInfo {
+          VkStructureType         sType;
+          const void*             pNext;
+          VkCommandPool           commandPool;
+          VkCommandBufferLevel    level;
+          uint32_t                commandBufferCount;
+      } VkCommandBufferAllocateInfo;
+    */
+    VkCommandBufferAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.commandPool = command_pool;
+    /*
+      typedef enum VkCommandBufferLevel {
+          VK_COMMAND_BUFFER_LEVEL_PRIMARY = 0,
+          VK_COMMAND_BUFFER_LEVEL_SECONDARY = 1,
+          VK_COMMAND_BUFFER_LEVEL_MAX_ENUM = 0x7FFFFFFF
+      } VkCommandBufferLevel;
+    */
+    alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandBufferCount = 1;
+
+    VkCommandBuffer command_buffer;
+    if (vkAllocateCommandBuffers(device, &alloc_info, &command_buffer) != VK_SUCCESS) {
+        exit_with_error("Failed to allocate command buffer");
+    }
+
+    return command_buffer;
+}
+
+void record_command_buffer(VkCommandBuffer command_buffer,
+                           VkRenderPass render_pass,
+                           VkFramebuffer framebuffer,
+                           VkPipeline pipeline,
+                           VkBuffer vertex_buffer,
+                           VkExtent2D swapchain_extent) {
+    VkCommandBufferBeginInfo command_buffer_begin_info = {0};
+    command_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+    if (vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info) != VK_SUCCESS) {
+        exit_with_error("Failed to begin recording command buffer");
+    }
+
+    // Begin render pass
+    /*
+      typedef struct VkRenderPassBeginInfo {
+          VkStructureType        sType;
+          const void*            pNext;
+          VkRenderPass           renderPass;
+          VkFramebuffer          framebuffer;
+          VkRect2D               renderArea;
+          uint32_t               clearValueCount;
+          const VkClearValue*    pClearValues;
+      } VkRenderPassBeginInfo;
+    */
+    VkRenderPassBeginInfo render_pass_begin_info = {0};
+    render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_begin_info.renderPass = render_pass;
+    render_pass_begin_info.framebuffer = framebuffer;
+    render_pass_begin_info.renderArea.offset = (VkOffset2D){0, 0};
+    render_pass_begin_info.renderArea.extent = swapchain_extent;
+
+    /*
+      typedef union VkClearColorValue {
+          float       float32[4];
+          int32_t     int32[4];
+          uint32_t    uint32[4];
+      } VkClearColorValue;
+
+      typedef union VkClearValue {
+          VkClearColorValue           color;
+          VkClearDepthStencilValue    depthStencil;
+      } VkClearValue;
+    */
+    VkClearValue clear_color = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    render_pass_begin_info.clearValueCount = 1;
+    render_pass_begin_info.pClearValues = &clear_color;
+
+    /*
+      VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(
+          VkCommandBuffer                             commandBuffer,
+          const VkRenderPassBeginInfo*                pRenderPassBegin,
+          VkSubpassContents                           contents);
+
+      typedef enum VkSubpassContents {
+          VK_SUBPASS_CONTENTS_INLINE = 0,
+          VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS = 1,
+          VK_SUBPASS_CONTENTS_INLINE_AND_SECONDARY_COMMAND_BUFFERS_KHR = 1000451000,
+          VK_SUBPASS_CONTENTS_INLINE_AND_SECONDARY_COMMAND_BUFFERS_EXT = VK_SUBPASS_CONTENTS_INLINE_AND_SECONDARY_COMMAND_BUFFERS_KHR,
+          VK_SUBPASS_CONTENTS_MAX_ENUM = 0x7FFFFFFF
+      } VkSubpassContents;
+    */
+    vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+    /*
+      VKAPI_ATTR void VKAPI_CALL vkCmdBindPipeline(
+          VkCommandBuffer                             commandBuffer,
+          VkPipelineBindPoint                         pipelineBindPoint,
+          VkPipeline                                  pipeline);
+    */
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+    VkDeviceSize offsets[] = {0};
+    /*
+      VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(
+          VkCommandBuffer                             commandBuffer,
+          uint32_t                                    firstBinding,
+          uint32_t                                    bindingCount,
+          const VkBuffer*                             pBuffers,
+          const VkDeviceSize*                         pOffsets);
+    */
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets);
+
+    // Draw the triangle
+    /*
+      VKAPI_ATTR void VKAPI_CALL vkCmdDraw(
+          VkCommandBuffer                             commandBuffer,
+          uint32_t                                    vertexCount,
+          uint32_t                                    instanceCount,
+          uint32_t                                    firstVertex,
+          uint32_t                                    firstInstance);
+    */
+    vkCmdDraw(command_buffer, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(command_buffer);
+
+    if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+        exit_with_error("Failed to record command buffer");
+    }
+}
+
+Synchronization_Objects create_synchronization_objects(VkDevice device) {
+    Synchronization_Objects result;
+
+    /*
+      typedef struct VkSemaphoreCreateInfo {
+          VkStructureType           sType;
+          const void*               pNext;
+          VkSemaphoreCreateFlags    flags;
+      } VkSemaphoreCreateInfo;
+    */
+    VkSemaphoreCreateInfo semaphore_info = {0};
+    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    if (vkCreateSemaphore(device, &semaphore_info, NULL, &result.image_available_semaphore) != VK_SUCCESS ||
+        vkCreateSemaphore(device, &semaphore_info, NULL, &result.render_finished_semaphore) != VK_SUCCESS) {
+        exit_with_error("Failed to create semaphores");
+    }
+
+    /*
+      typedef struct VkFenceCreateInfo {
+          VkStructureType       sType;
+          const void*           pNext;
+          VkFenceCreateFlags    flags;
+      } VkFenceCreateInfo;
+    */
+    VkFenceCreateInfo fence_info = {0};
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    /*
+      typedef enum VkFenceCreateFlagBits {
+          VK_FENCE_CREATE_SIGNALED_BIT = 0x00000001,
+          VK_FENCE_CREATE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+      } VkFenceCreateFlagBits;
+    */
+    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    if (vkCreateFence(device, &fence_info, NULL, &result.in_flight_fence) != VK_SUCCESS) {
+        exit_with_error("Failed to create fence");
+    }
+
+    return result;
+}
+
+void draw_frame(VkDevice device,
+                Swapchain_Etc swapchain_etc,
+                VkFramebuffer *swapchain_framebuffers,
+                VkRenderPass render_pass,
+                VkPipeline pipeline,
+                VkBuffer vertex_buffer,
+                VkQueue graphics_queue,
+                VkQueue present_queue,
+                VkCommandBuffer command_buffer,
+                Synchronization_Objects *sync) {
+    /*
+      VKAPI_ATTR VkResult VKAPI_CALL vkWaitForFences(
+          VkDevice                                    device,
+          uint32_t                                    fenceCount,
+          const VkFence*                              pFences,
+          VkBool32                                    waitAll,
+          uint64_t                                    timeout);
+    */
+    vkWaitForFences(device, 1, &sync->in_flight_fence, VK_TRUE, UINT64_MAX);
+    vkResetFences(device, 1, &sync->in_flight_fence);
+
+    uint32_t image_index;
+    vkAcquireNextImageKHR(device, swapchain_etc.swapchain, UINT64_MAX, sync->image_available_semaphore, VK_NULL_HANDLE, &image_index);
+
+    // Reset and re-record the command buffer for the current_image
+    vkResetCommandBuffer(command_buffer, 0);
+    record_command_buffer(command_buffer,
+                          render_pass,
+                          swapchain_framebuffers[image_index],
+                          pipeline,
+                          vertex_buffer,
+                          swapchain_etc.swapchain_extent);
+
+
+    /*
+      typedef struct VkSubmitInfo {
+          VkStructureType                sType;
+          const void*                    pNext;
+          uint32_t                       waitSemaphoreCount;
+          const VkSemaphore*             pWaitSemaphores;
+          const VkPipelineStageFlags*    pWaitDstStageMask;
+          uint32_t                       commandBufferCount;
+          const VkCommandBuffer*         pCommandBuffers;
+          uint32_t                       signalSemaphoreCount;
+          const VkSemaphore*             pSignalSemaphores;
+      } VkSubmitInfo;
+    */
+    VkSubmitInfo submit_info = {0};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore wait_semaphores[] = {sync->image_available_semaphore};
+    VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = wait_semaphores;
+    submit_info.pWaitDstStageMask = wait_stages;
+
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+
+    VkSemaphore signal_semaphores[] = {sync->render_finished_semaphore};
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = signal_semaphores;
+
+    if (vkQueueSubmit(graphics_queue, 1, &submit_info, sync->in_flight_fence) != VK_SUCCESS) {
+        exit_with_error("Failed to submit draw command buffer");
+    }
+
+    /*
+      typedef struct VkPresentInfoKHR {
+          VkStructureType          sType;
+          const void*              pNext;
+          uint32_t                 waitSemaphoreCount;
+          const VkSemaphore*       pWaitSemaphores;
+          uint32_t                 swapchainCount;
+          const VkSwapchainKHR*    pSwapchains;
+          const uint32_t*          pImageIndices;
+          VkResult*                pResults;
+      } VkPresentInfoKHR;
+    */
+    VkPresentInfoKHR present_info = {0};
+    present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+    VkSwapchainKHR swapchains[] = {swapchain_etc.swapchain};
+    present_info.swapchainCount = 1;
+    present_info.pSwapchains = swapchains;
+    present_info.pImageIndices = &image_index;
+
+    VkSemaphore wait_for_semaphores[] = {sync->render_finished_semaphore};
+    present_info.waitSemaphoreCount = 1;
+    present_info.pWaitSemaphores = wait_for_semaphores;
+
+    vkQueuePresentKHR(present_queue, &present_info);
+}
+
+void destroy_synchronization_objects(VkDevice device, Synchronization_Objects *sync) {
+    vkDestroySemaphore(device, sync->image_available_semaphore, NULL);
+    vkDestroySemaphore(device, sync->render_finished_semaphore, NULL);
+    vkDestroyFence(device, sync->in_flight_fence, NULL);
 }
